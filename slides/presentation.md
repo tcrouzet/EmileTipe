@@ -92,7 +92,7 @@ Une planète passant devant son étoile provoque une baisse faible et périodiqu
   <span>Test final<br><b>15 %</b></span>
 </div>
 
-<p class="note">Même information de départ, mêmes systèmes de test, aucun réglage sur le test final.</p>
+<p class="note"><b>Dataset construit à partir de Kepler DR25 :</b> 42 hôtes de planètes confirmées (P ≤ 30 jours) et 2 958 contrôles sans aucun KOI ni TCE.<br>Pour chaque système, jusqu’à trois courbes de lumière sont téléchargées depuis MAST ; la sélection est reproductible.</p>
 
 ---
 
