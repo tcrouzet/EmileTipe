@@ -3,8 +3,8 @@ marp: true
 theme: emiletype
 paginate: true
 size: 16:9
-title: Quelle est la méthode optimale de détection d'une exoplanète ?
-description: Présentation générale du projet EmileType
+title: Détection d'exoplanètes dans les données Kepler
+description: Comparaison du BLS à un futur réseau de neurones
 ---
 
 <!-- _class: title -->
@@ -12,117 +12,126 @@ description: Présentation générale du projet EmileType
 
 <p class="kicker">TIPE · PHYSIQUE & INFORMATIQUE</p>
 
-# Quelle est la méthode optimale de détection d’une exoplanète ?
+# Détecter des exoplanètes dans les données de Kepler
 
-Comparer un algorithme physique classique à un réseau de neurones.
+Établir une référence avec le **Box Least Squares**, puis vérifier si un réseau de neurones peut faire mieux sur les mêmes systèmes.
 
-<p class="author">EmileType · Méthode des transits · Données Kepler</p>
+<p class="author">EmileType · Méthode des transits · Kepler DR25</p>
 
 ---
 
-## 1. Détecter une planète invisible
+## 1. La donnée : une courbe de lumière par étoile
 
-<div class="columns">
+<div class="data-layout">
 <div>
 
-Une planète passant devant son étoile provoque une baisse faible et périodique de luminosité.
+Kepler mesure, toutes les **29,4 minutes**, la lumière reçue d’une étoile :
 
-- le signal est très court ;
-- le bruit et l’activité stellaire peuvent lui ressembler ;
-- les vraies planètes sont rares.
+```text
+(temps tᵢ, flux Fᵢ)
+```
+
+Une planète en transit produit une baisse périodique :
+
+```text
+δ = (F₀ − Fₜ) / F₀ ≈ (Rₚ / R★)²
+```
+
+Pour chaque système KIC :
+
+- 1 à 3 quarters d’environ 90 jours ;
+- colonnes utilisées : `TIME`, `PDCSAP_FLUX`, `SAP_QUALITY` ;
+- les trous d’observation sont conservés.
 
 </div>
-<div class="signal-card">
-  <div class="orbit"><span class="star">★</span><span class="planet"></span></div>
-  <svg viewBox="0 0 420 150" role="img" aria-label="Courbe de lumière montrant trois transits">
-    <path class="axis" d="M12 120 H408" />
-    <path class="curve" d="M12 45 L72 45 L78 102 L91 102 L97 45 L192 45 L198 102 L211 102 L217 45 L312 45 L318 102 L331 102 L337 45 L408 45" />
-  </svg>
-  <p>Temps → &nbsp;&nbsp; baisses périodiques du flux</p>
+<div>
+
+![Courbe réelle du système KIC 5542466](../docs/kic-5542466-light-curve.png)
+
+<p class="caption">KIC 5542466 · 11 739 mesures valides · P connue = 2,3557 jours. En bas, les orbites sont superposées pour rendre le transit visible.</p>
+
 </div>
 </div>
 
 ---
 
-## 2. Deux approches à comparer
+## 2. Construire un dataset contrôlé de 3 000 systèmes
 
-<div class="method-grid">
-<article class="method classical">
-  <span class="method-number">A</span>
-  <h3>Box Least Squares</h3>
-  <p>Recherche explicitement une baisse périodique en forme de boîte.</p>
-  <ul>
-    <li>modèle physique lisible ;</li>
-    <li>peu de paramètres ;</li>
-    <li>calcul relativement sobre.</li>
-  </ul>
-</article>
-<article class="method neural">
-  <span class="method-number">B</span>
-  <h3>Réseau de neurones</h3>
-  <p>Apprend les formes utiles directement à partir des courbes.</p>
-  <ul>
-    <li>modèle plus flexible ;</li>
-    <li>entraînement nécessaire ;</li>
-    <li>coût et décisions moins lisibles.</li>
-  </ul>
-</article>
-</div>
-
-<p class="question">Le gain de détection justifie-t-il la complexité supplémentaire ?</p>
-
----
-
-## 3. Une comparaison sur les mêmes données
-
-<div class="dataset-line">
+<div class="dataset-line compact">
   <div><strong>3 000</strong><span>systèmes Kepler</span></div>
-  <div><strong>42</strong><span>systèmes confirmés</span></div>
-  <div><strong>2 958</strong><span>étoiles témoins</span></div>
-  <div><strong>1,4 %</strong><span>de systèmes positifs</span></div>
+  <div><strong>42</strong><span>confirmés</span></div>
+  <div><strong>2 958</strong><span>contrôles</span></div>
+  <div><strong>1,4 %</strong><span>de positifs</span></div>
 </div>
 
-<div class="flow">
-  <span>Courbes officielles<br><b>Kepler / MAST</b></span>
-  <i>→</i>
-  <span>Entraînement<br><b>70 %</b></span>
-  <i>→</i>
-  <span>Validation<br><b>15 %</b></span>
-  <i>→</i>
-  <span>Test final<br><b>15 %</b></span>
+<div class="construction-grid">
+<article>
+  <span class="class-tag positive">POSITIFS</span>
+  <h3>Planètes confirmées</h3>
+  <p>Hôtes DR25 ayant au moins une planète confirmée de période ≤ 30 jours.</p>
+  <small>59 planètes connues · 54 dans la plage BLS · 11 systèmes multiples</small>
+</article>
+<article>
+  <span class="class-tag control">CONTRÔLES</span>
+  <h3>Aucun signal catalogué</h3>
+  <p>Cibles stellaires dont on retire tous les hôtes de KOI et de TCE DR25.</p>
+  <small>« Contrôle » ne prouve pas l’absence physique de planète.</small>
+</article>
 </div>
 
-<p class="note">Même information de départ, mêmes systèmes de test, aucun réglage sur le test final.</p>
+<div class="split-line"><b>Découpage :</b> 2 100 entraînement · 450 validation · 450 test &nbsp;—&nbsp; sélection reproductible, graine 727</div>
 
 ---
 
-## 4. Mesurer efficacité et sobriété
+## 3. La référence : Box Least Squares d’Astropy
 
-<div class="outcome-grid">
-<div>
+<div class="bls-steps">
+  <div><b>1</b><span><strong>Nettoyer</strong><small>qualité = 0<br>flux fini</small></span></div>
+  <i>→</i>
+  <div><b>2</b><span><strong>Normaliser</strong><small>médiane par quarter<br>tendance de 2 jours</small></span></div>
+  <i>→</i>
+  <div><b>3</b><span><strong>Replier</strong><small>100 000 périodes<br>de 0,5 à 30 jours</small></span></div>
+  <i>→</i>
+  <div><b>4</b><span><strong>Ajuster</strong><small>position, durée<br>et profondeur d’une boîte</small></span></div>
+</div>
 
-### Qualité de détection
+<div class="equation-card">
+  <div>
+    <span class="eyebrow">MODÈLE</span>
+    <strong>Le meilleur transit minimise</strong>
+    <code>RSS = Σ (yᵢ − modèleᵢ)²</code>
+  </div>
+  <div>
+    <span class="eyebrow">DÉCISION</span>
+    <strong>Boîte brève plutôt qu’oscillation</strong>
+    <code>S = √[max(0, −ΔlogL) / (durée/période)]</code>
+  </div>
+</div>
 
-- précision : les alertes sont-elles justes ?
-- rappel : combien de planètes sont retrouvées ?
-- faux positifs et faux négatifs ;
+<p class="note"><b>Bibliothèque :</b> <code>astropy.timeseries.BoxLeastSquares</code> · seuil choisi hors pli : <b>S ≈ 162,8</b></p>
 
+---
+
+## 4. Résultat BLS et prochaine comparaison
+
+<div class="results-layout">
+<div class="confusion">
+  <div class="corner"></div><div class="truth">Confirmé</div><div class="truth">Contrôle</div>
+  <div class="prediction">BLS positif</div><div class="cell tp"><b>11</b><span>vrais positifs</span></div><div class="cell fp"><b>14</b><span>faux positifs</span></div>
+  <div class="prediction">BLS négatif</div><div class="cell fn"><b>31</b><span>faux négatifs</span></div><div class="cell tn"><b>2 944</b><span>vrais négatifs</span></div>
 </div>
 <div>
-
-### Coût de la méthode
-
-- temps d’entraînement ;
-- temps d’analyse par système ;
-- mémoire et volume du modèle ;
-- facilité d’explication du résultat.
-
+  <div class="metric-list">
+    <p><b>44,0 %</b><span>précision<br><small>11 bonnes alertes sur 25</small></span></p>
+    <p><b>26,2 %</b><span>rappel<br><small>11 systèmes retrouvés sur 42</small></span></p>
+    <p><b>32,8 %</b><span>score F1</span></p>
+  </div>
 </div>
 </div>
 
-<div class="conclusion">
-  <span>Objectif final</span>
-  <strong>Identifier le meilleur compromis entre détection, fiabilité et coût de calcul.</strong>
+<div class="next-step">
+  <span>ÉTAPE SUIVANTE</span>
+  <strong>Entraîner un réseau sur les mêmes KIC et mesurer s’il augmente le rappel sans multiplier les fausses alertes.</strong>
 </div>
 
-<p class="sources">Sources : NASA Kepler/MAST · Kovács, Zucker & Mazeh (BLS, 2002) · Shallue & Vanderburg (AstroNet, 2018)</p>
+<p class="sources">Sources : NASA Exoplanet Archive · MAST/Kepler DR25 · Kovács, Zucker & Mazeh (2002) · Astropy BoxLeastSquares</p>
