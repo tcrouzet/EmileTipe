@@ -3,8 +3,8 @@ marp: true
 theme: emiletype
 paginate: true
 size: 16:9
-title: Détection d'exoplanètes dans les données Kepler
-description: Comparaison du BLS à un futur réseau de neurones
+title: Quelle est la méthode optimale de détection d'une exoplanète ?
+description: Présentation générale du projet EmileType
 ---
 
 <!-- _class: title -->
@@ -12,44 +12,33 @@ description: Comparaison du BLS à un futur réseau de neurones
 
 <p class="kicker">TIPE · PHYSIQUE & INFORMATIQUE</p>
 
-# Détecter des exoplanètes dans les données de Kepler
+# Quelle est la méthode optimale de détection d’une exoplanète ?
 
-Établir une référence avec le **Box Least Squares**, puis vérifier si un réseau de neurones peut faire mieux sur les mêmes systèmes.
+Comparer un algorithme physique classique à un réseau de neurones.
 
-<p class="author">EmileType · Méthode des transits · Kepler DR25</p>
+<p class="author">EmileType · Méthode des transits · Données Kepler</p>
 
 ---
 
-## 1. La donnée : une courbe de lumière par étoile
+## 1. Détecter une planète invisible
 
-<div class="data-layout">
+<div class="columns">
 <div>
 
-Kepler mesure, toutes les **29,4 minutes**, la lumière reçue d’une étoile :
+Une planète passant devant son étoile provoque une baisse faible et périodique de luminosité.
 
-```text
-(temps tᵢ, flux Fᵢ)
-```
-
-Une planète en transit produit une baisse périodique :
-
-```text
-δ = (F₀ − Fₜ) / F₀ ≈ (Rₚ / R★)²
-```
-
-Pour chaque système KIC :
-
-- 1 à 3 quarters d’environ 90 jours ;
-- colonnes utilisées : `TIME`, `PDCSAP_FLUX`, `SAP_QUALITY` ;
-- les trous d’observation sont conservés.
+- le signal est très court ;
+- le bruit et l’activité stellaire peuvent lui ressembler ;
+- les vraies planètes sont rares.
 
 </div>
-<div>
-
-![Courbe réelle du système KIC 5542466](../docs/kic-5542466-light-curve.png)
-
-<p class="caption">KIC 5542466 · 11 739 mesures valides · P connue = 2,3557 jours. En bas, les orbites sont superposées pour rendre le transit visible.</p>
-
+<div class="signal-card">
+  <div class="orbit"><span class="star">★</span><span class="planet"></span></div>
+  <svg viewBox="0 0 420 150" role="img" aria-label="Courbe de lumière montrant trois transits">
+    <path class="axis" d="M12 120 H408" />
+    <path class="curve" d="M12 45 L72 45 L78 102 L91 102 L97 45 L192 45 L198 102 L211 102 L217 45 L312 45 L318 102 L331 102 L337 45 L408 45" />
+  </svg>
+  <p>Temps → &nbsp;&nbsp; baisses périodiques du flux</p>
 </div>
 </div>
 
@@ -84,55 +73,56 @@ Pour chaque système KIC :
 
 ---
 
-## 3. La référence : Box Least Squares d’Astropy
+## 3. Une comparaison sur les mêmes données
 
-<div class="bls-steps">
-  <div><b>1</b><span><strong>Nettoyer</strong><small>qualité = 0<br>flux fini</small></span></div>
-  <i>→</i>
-  <div><b>2</b><span><strong>Normaliser</strong><small>médiane par quarter<br>tendance de 2 jours</small></span></div>
-  <i>→</i>
-  <div><b>3</b><span><strong>Replier</strong><small>100 000 périodes<br>de 0,5 à 30 jours</small></span></div>
-  <i>→</i>
-  <div><b>4</b><span><strong>Ajuster</strong><small>position, durée<br>et profondeur d’une boîte</small></span></div>
+<div class="dataset-line">
+  <div><strong>3 000</strong><span>systèmes Kepler</span></div>
+  <div><strong>42</strong><span>systèmes confirmés</span></div>
+  <div><strong>2 958</strong><span>étoiles témoins</span></div>
+  <div><strong>1,4 %</strong><span>de systèmes positifs</span></div>
 </div>
 
-<div class="equation-card">
-  <div>
-    <span class="eyebrow">MODÈLE</span>
-    <strong>Le meilleur transit minimise</strong>
-    <code>RSS = Σ (yᵢ − modèleᵢ)²</code>
-  </div>
-  <div>
-    <span class="eyebrow">DÉCISION</span>
-    <strong>Boîte brève plutôt qu’oscillation</strong>
-    <code>S = √[max(0, −ΔlogL) / (durée/période)]</code>
-  </div>
+<div class="flow">
+  <span>Courbes officielles<br><b>Kepler / MAST</b></span>
+  <i>→</i>
+  <span>Entraînement<br><b>70 %</b></span>
+  <i>→</i>
+  <span>Validation<br><b>15 %</b></span>
+  <i>→</i>
+  <span>Test final<br><b>15 %</b></span>
 </div>
 
-<p class="note"><b>Bibliothèque :</b> <code>astropy.timeseries.BoxLeastSquares</code> · seuil choisi hors pli : <b>S ≈ 162,8</b></p>
+<p class="note">Même information de départ, mêmes systèmes de test, aucun réglage sur le test final.</p>
 
 ---
 
-## 4. Résultat BLS et prochaine comparaison
+## 4. Mesurer efficacité et sobriété
 
-<div class="results-layout">
-<div class="confusion">
-  <div class="corner"></div><div class="truth">Confirmé</div><div class="truth">Contrôle</div>
-  <div class="prediction">BLS positif</div><div class="cell tp"><b>11</b><span>vrais positifs</span></div><div class="cell fp"><b>14</b><span>faux positifs</span></div>
-  <div class="prediction">BLS négatif</div><div class="cell fn"><b>31</b><span>faux négatifs</span></div><div class="cell tn"><b>2 944</b><span>vrais négatifs</span></div>
+<div class="outcome-grid">
+<div>
+
+### Qualité de détection
+
+- précision : les alertes sont-elles justes ?
+- rappel : combien de planètes sont retrouvées ?
+- faux positifs et faux négatifs ;
+
 </div>
 <div>
-  <div class="metric-list">
-    <p><b>44,0 %</b><span>précision<br><small>11 bonnes alertes sur 25</small></span></p>
-    <p><b>26,2 %</b><span>rappel<br><small>11 systèmes retrouvés sur 42</small></span></p>
-    <p><b>32,8 %</b><span>score F1</span></p>
-  </div>
+
+### Coût de la méthode
+
+- temps d’entraînement ;
+- temps d’analyse par système ;
+- mémoire et volume du modèle ;
+- facilité d’explication du résultat.
+
 </div>
 </div>
 
-<div class="next-step">
-  <span>ÉTAPE SUIVANTE</span>
-  <strong>Entraîner un réseau sur les mêmes KIC et mesurer s’il augmente le rappel sans multiplier les fausses alertes.</strong>
+<div class="conclusion">
+  <span>Objectif final</span>
+  <strong>Identifier le meilleur compromis entre détection, fiabilité et coût de calcul.</strong>
 </div>
 
-<p class="sources">Sources : NASA Exoplanet Archive · MAST/Kepler DR25 · Kovács, Zucker & Mazeh (2002) · Astropy BoxLeastSquares</p>
+<p class="sources">Sources : NASA Kepler/MAST · Kovács, Zucker & Mazeh (BLS, 2002) · Shallue & Vanderburg (AstroNet, 2018)</p>
