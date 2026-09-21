@@ -61,11 +61,24 @@ li { margin: 10px 0; }
 .question { margin: 28px auto 0; color: var(--blue); font-size: 23px; font-weight: 600; text-align: center; }
 
 .dataset-line { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 54px; }
+.dataset-intro { margin: -22px 0 22px; color: var(--muted); font-size: 18px; line-height: 1.4; }
+.dataset-intro + .dataset-line { margin-bottom: 30px; }
 .dataset-line div { padding: 20px 18px; border-radius: 12px; background: var(--soft); text-align: center; }
 .dataset-line div:first-child { background: #e8f0fe; }.dataset-line strong, .dataset-line span { display: block; }.dataset-line strong { color: var(--blue); font-size: 39px; }.dataset-line span { margin-top: 6px; color: var(--muted); font-size: 16px; }
 .flow { display: flex; align-items: center; justify-content: center; gap: 16px; }
 .flow span { min-width: 205px; padding: 19px 15px; border: 1px solid var(--line); border-radius: 12px; font-size: 18px; line-height: 1.45; text-align: center; }.flow i { color: #9aa0a6; font-size: 29px; font-style: normal; }.flow b { color: var(--blue); }
-.note { margin-top: 42px; color: var(--muted); font-size: 18px; text-align: center; }
+.note { max-width: 920px; margin: 0 auto; padding: 18px 24px; border-radius: 12px; color: var(--ink); background: #e8f0fe; font-size: 20px; text-align: center; }
+
+.library-line { margin: -20px 0 18px; color: var(--muted); font-size: 18px; }
+.library-line a { color: var(--blue); text-decoration: none; }
+.score-table { display: table; width: 100%; border-collapse: separate; border-spacing: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; font-size: 16px; }
+.score-table th, .score-table td { padding: 8px 16px; border: 0; border-bottom: 1px solid var(--line); }
+.score-table thead th { color: var(--muted); background: #f1f3f4; font-size: 13px; font-weight: 700; letter-spacing: .04em; text-align: left; text-transform: uppercase; }
+.score-table tbody tr:last-child td { border-bottom: 0; }
+.score-table td:nth-child(1) { width: 24%; }
+.score-table td:nth-child(2) { width: 16%; color: var(--blue); font-size: 19px; }
+.score-table .metric td { background: #f8fafd; }
+.result-note { margin-top: 16px; padding: 12px 18px; border-radius: 9px; color: var(--muted); background: #e8f0fe; font-size: 16px; text-align: center; }
 
 .outcome-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 30px; }
 .outcome-grid > div { padding: 24px 30px; border-left: 4px solid var(--blue); border-radius: 0 12px 12px 0; background: var(--soft); }.outcome-grid > div:last-child { border-left-color: var(--green); }

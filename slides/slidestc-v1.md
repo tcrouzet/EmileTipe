@@ -66,7 +66,7 @@ Une planète passant devant son étoile provoque une baisse faible et périodiqu
     <li>modèle plus flexible ;</li>
     <li>entraînement nécessaire ;</li>
     <li>coût et décisions moins lisibles ;</li>
-    <li>tenter de faire mieux que BLS.</li>
+    <li>tenter de faire ieux que BLS.</li>
   </ul>
 </article>
 </div>
@@ -97,14 +97,17 @@ Une planète passant devant son étoile provoque une baisse faible et périodiqu
 <table class="score-table">
   <thead><tr><th>Mesure</th><th>Résultat</th><th>Interprétation</th></tr></thead>
   <tbody>
-    <tr><td>Vrais positifs</td><td><b>11</b></td><td>11 planètes correctement signalées</td></tr>
-    <tr><td>Faux positifs</td><td><b>14</b></td><td>14 alertes alors qu’aucune planète n’est connue</td></tr>
-    <tr><td>Faux négatifs</td><td><b>31</b></td><td>31 planètes connues manquées par le BLS</td></tr>
-    <tr><td>Vrais négatifs</td><td><b>2 944</b></td><td>2 944 étoiles correctement classées sans planète</td></tr>
-    <tr class="metric"><td>Précision</td><td><b>44,0 %</b></td><td>parmi les 25 alertes, 11 sont justes</td></tr>
-    <tr class="metric"><td>Rappel</td><td><b>26,2 %</b></td><td>parmi les 42 planètes connues, 11 sont retrouvées</td></tr>
+    <tr><td>Vrais positifs</td><td><b>11</b></td><td>systèmes confirmés retrouvés</td></tr>
+    <tr><td>Faux positifs</td><td><b>14</b></td><td>fausses alertes parmi les témoins</td></tr>
+    <tr><td>Faux négatifs</td><td><b>31</b></td><td>systèmes confirmés non retrouvés</td></tr>
+    <tr><td>Vrais négatifs</td><td><b>2 944</b></td><td>témoins correctement écartés</td></tr>
+    <tr class="metric"><td>Précision</td><td><b>44,0 %</b></td><td>11 bonnes alertes sur 25</td></tr>
+    <tr class="metric"><td>Rappel</td><td><b>26,2 %</b></td><td>11 systèmes retrouvés sur 42</td></tr>
+    <tr class="metric"><td>Score F1</td><td><b>32,8 %</b></td><td>compromis entre précision et rappel</td></tr>
   </tbody>
 </table>
+
+<p class="result-note">La période attendue, ou une harmonique simple, est retrouvée pour <b>29 systèmes confirmés sur 42</b>.</p>
 
 ---
 
