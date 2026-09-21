@@ -4,7 +4,7 @@ Ce projet étudie une question simple : **un réseau de neurones peut-il mieux d
 
 La première étape, documentée ici, construit un jeu de 3 000 systèmes Kepler et établit une référence reproductible avec le BLS officiel d'Astropy. Le réseau de neurones sera ajouté dans une étape ultérieure. Il devra utiliser les mêmes systèmes, les mêmes labels et les mêmes partitions afin que la comparaison soit scientifiquement interprétable.
 
-Le tableau de bord contenu dans `web/` présente les résultats système par système et la matrice de confusion du BLS. Son URL GitHub Pages prévue est <https://tcrouzet.github.io/EmileTipe/> ; elle ne deviendra accessible qu'après passage du dépôt en visibilité publique ou activation d'un forfait GitHub compatible avec Pages sur les dépôts privés.
+Le [tableau de bord public](https://tcrouzet.github.io/EmileTipe/) contenu dans `web/` présente les résultats système par système et la matrice de confusion du BLS.
 
 ## 1. Que contiennent les données Kepler ?
 
@@ -322,7 +322,7 @@ cd web
 ../.venv/bin/python -m http.server 8000
 ```
 
-Puis ouvrir <http://localhost:8000>. Le workflow de déploiement GitHub Pages est installé, mais GitHub refuse actuellement son activation parce que le dépôt est privé et que le forfait du propriétaire ne prend pas en charge Pages pour les dépôts privés. Une fois ce point réglé, chaque modification de `web/` sur `main` republiera automatiquement le site.
+Puis ouvrir <http://localhost:8000>. Le workflow GitHub Pages republie automatiquement le site public après chaque modification de `web/` sur la branche `main`.
 
 Tests :
 
