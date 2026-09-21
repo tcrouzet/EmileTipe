@@ -2,3 +2,4 @@
 certifi>=2025.8
 astropy>=8,<9
 lightkurve>=2.5,<3
+tqdm>=4.67,<5

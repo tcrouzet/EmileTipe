@@ -1,9 +1,11 @@
 import unittest
 
 from script.dataset.build import (
+    DATASET_PROFILES,
     System,
     TCE,
     confirmed_systems,
+    manifest_rows,
     select_systems,
     unambiguous_systems,
 )
@@ -37,6 +39,38 @@ class DatasetTest(unittest.TestCase):
         second = select_systems(candidates, class_counts=counts, seed=727)
         self.assertEqual(first, second)
         self.assertEqual(len(first), 6)
+
+    def test_training_profile_is_balanced_and_has_no_test_split(self):
+        profile = DATASET_PROFILES["training"]
+        self.assertEqual(
+            profile.class_counts,
+            {"CONFIRMED": 1_500, "CONTROL": 1_500},
+        )
+        self.assertEqual(
+            profile.class_splits,
+            {
+                "CONFIRMED": {"train": 1_200, "validation": 300},
+                "CONTROL": {"train": 1_200, "validation": 300},
+            },
+        )
+
+    def test_manifest_rows_uses_the_requested_splits(self):
+        systems = [
+            System(kepid, "CONFIRMED", ()) for kepid in range(1, 5)
+        ] + [
+            System(kepid, "CONTROL", ()) for kepid in range(101, 105)
+        ]
+        rows = manifest_rows(
+            systems,
+            seed=727,
+            class_splits={
+                "CONFIRMED": {"train": 3, "validation": 1},
+                "CONTROL": {"train": 3, "validation": 1},
+            },
+        )
+        self.assertEqual(sum(row["split"] == "train" for row in rows), 6)
+        self.assertEqual(sum(row["split"] == "validation" for row in rows), 2)
+        self.assertNotIn("test", {row["split"] for row in rows})
 
 
 if __name__ == "__main__":

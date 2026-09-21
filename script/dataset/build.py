@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Construit un sous-ensemble Kepler rare et etiquete de 3 000 systemes.
+"""Construit les datasets Kepler d'evaluation et d'apprentissage.
 
 Deux etapes sont volontairement separees :
 
@@ -21,12 +21,14 @@ import ssl
 import sys
 import urllib.parse
 import urllib.request
-from collections import defaultdict
+from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Sequence
+
+from tqdm import tqdm
 
 from script import config
 
@@ -60,6 +62,11 @@ CLASS_SPLITS = {
     "CONFIRMED": {"train": 32, "validation": 5, "test": 5},
     "CONTROL": {"train": 2_068, "validation": 445, "test": 445},
 }
+TRAINING_CLASS_COUNTS = {"CONFIRMED": 1_500, "CONTROL": 1_500}
+TRAINING_CLASS_SPLITS = {
+    "CONFIRMED": {"train": 1_200, "validation": 300},
+    "CONTROL": {"train": 1_200, "validation": 300},
+}
 DEFAULT_MAX_PERIOD_DAYS = 30.0
 DEFAULT_SEED = 727
 DEFAULT_QUARTERS = (4, 5, 6)
@@ -85,6 +92,36 @@ QUARTER_FILE_IDS = {
     17: "2013131215648",
 }
 MAST_LIGHT_CURVE_ROOT = "https://archive.stsci.edu/pub/kepler/lightcurves"
+
+
+@dataclass(frozen=True)
+class DatasetProfile:
+    """Parametres qui distinguent un dataset sans dupliquer sa construction."""
+
+    directory_name: str
+    purpose: str
+    class_counts: dict[str, int]
+    class_splits: dict[str, dict[str, int]]
+    excluded_manifest: Path | None = None
+
+
+DATASET_PROFILES = {
+    "benchmark": DatasetProfile(
+        directory_name="kepler_3000",
+        purpose="final comparison benchmark with realistic class imbalance",
+        class_counts=CLASS_COUNTS,
+        class_splits=CLASS_SPLITS,
+    ),
+    "training": DatasetProfile(
+        directory_name="kepler_training",
+        purpose="balanced neural-network training and validation dataset",
+        class_counts=TRAINING_CLASS_COUNTS,
+        class_splits=TRAINING_CLASS_SPLITS,
+        excluded_manifest=config.DATA_DIR / "kepler_3000" / "manifest.csv",
+    ),
+}
+
+
 @dataclass(frozen=True)
 class TCE:
     kepid: int
@@ -316,18 +353,24 @@ def select_systems(
     return selected
 
 
-def split_for_rank(rank: int, label: str) -> str:
-    train_end = CLASS_SPLITS[label]["train"]
-    validation_end = train_end + CLASS_SPLITS[label]["validation"]
-    if rank < train_end:
-        return "train"
-    if rank < validation_end:
-        return "validation"
-    return "test"
+def split_for_rank(
+    rank: int,
+    label: str,
+    class_splits: dict[str, dict[str, int]] = CLASS_SPLITS,
+) -> str:
+    offset = 0
+    for split, count in class_splits[label].items():
+        offset += count
+        if rank < offset:
+            return split
+    raise ValueError(f"Rang {rank} hors des partitions de la classe {label}")
 
 
 def manifest_rows(
-    systems: Sequence[System], *, seed: int
+    systems: Sequence[System],
+    *,
+    seed: int,
+    class_splits: dict[str, dict[str, int]] = CLASS_SPLITS,
 ) -> list[dict[str, str | int | float]]:
     rows: list[dict[str, str | int | float]] = []
     for label in LABELS:
@@ -336,7 +379,12 @@ def manifest_rows(
             key=lambda item: _selection_key(item, seed),
         )
         for rank, system in enumerate(group):
-            rows.append(system_manifest_row(system, split_for_rank(rank, label)))
+            rows.append(
+                system_manifest_row(
+                    system,
+                    split_for_rank(rank, label, class_splits),
+                )
+            )
     return sorted(rows, key=lambda row: (str(row["split"]), str(row["label"]), int(row["kepid"])))
 
 
@@ -379,12 +427,27 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def manifest_kepids(path: Path) -> set[int]:
+    """Retourne les KIC d'un manifeste a exclure d'un autre dataset."""
+    return {int(row["kepid"]) for row in read_manifest(path)}
+
+
+def portable_path(path: Path) -> str:
+    """Evite d'inscrire un chemin propre a la machine dans la provenance."""
+    try:
+        return str(path.resolve().relative_to(config.PROJECT_ROOT.resolve()))
+    except ValueError:
+        return str(path)
+
+
 def build_manifest(args: argparse.Namespace) -> None:
     root: Path = args.dataset_dir
-    confirmed_catalog = root / "source" / "q1_q17_dr25_confirmed_koi.csv"
-    stellar_catalog = root / "source" / "q1_q17_dr25_stellar_kepids.csv"
-    all_tce_catalog = root / "source" / "q1_q17_dr25_all_tce_kepids.csv"
-    all_koi_catalog = root / "source" / "q1_q17_dr25_all_koi_kepids.csv"
+    profile = DATASET_PROFILES[args.profile]
+    catalog_root: Path = args.catalog_dir
+    confirmed_catalog = catalog_root / "q1_q17_dr25_confirmed_koi.csv"
+    stellar_catalog = catalog_root / "q1_q17_dr25_stellar_kepids.csv"
+    all_tce_catalog = catalog_root / "q1_q17_dr25_all_tce_kepids.csv"
+    all_koi_catalog = catalog_root / "q1_q17_dr25_all_koi_kepids.csv"
     manifest = root / "manifest.csv"
     confirmed_url = tap_url(confirmed_archive_query())
     stellar_url = stellar_catalog_url()
@@ -402,27 +465,59 @@ def build_manifest(args: argparse.Namespace) -> None:
         | read_kepids(all_koi_catalog)
         | confirmed_kepids
     )
+    excluded_manifest = args.exclude_manifest or profile.excluded_manifest
+    held_out_kepids: set[int] = set()
+    if excluded_manifest is not None:
+        if not excluded_manifest.exists():
+            raise ValueError(
+                f"Manifeste a exclure introuvable: {excluded_manifest}. "
+                "Construire d'abord le dataset de comparaison."
+            )
+        held_out_kepids = manifest_kepids(excluded_manifest)
+
     candidates = {
         "CONFIRMED": confirmed_systems(
             confirmed_events, max_period_days=args.max_period
         ),
         "CONTROL": control_systems(read_kepids(stellar_catalog), excluded_kepids),
     }
+    if held_out_kepids:
+        candidates = {
+            label: [
+                system
+                for system in systems
+                if system.kepid not in held_out_kepids
+            ]
+            for label, systems in candidates.items()
+        }
     selected = select_systems(
-        candidates, class_counts=CLASS_COUNTS, seed=args.seed
+        candidates, class_counts=profile.class_counts, seed=args.seed
     )
-    rows = manifest_rows(selected, seed=args.seed)
+    rows = manifest_rows(
+        selected,
+        seed=args.seed,
+        class_splits=profile.class_splits,
+    )
     write_csv(manifest, rows)
 
     counts = {
         label: sum(row["label"] == label for row in rows) for label in LABELS
     }
+    split_names = tuple(
+        dict.fromkeys(
+            split
+            for label in LABELS
+            for split in profile.class_splits[label]
+        )
+    )
     splits = {
         split: sum(row["split"] == split for row in rows)
-        for split in ("train", "validation", "test")
+        for split in split_names
     }
     provenance = {
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "profile": args.profile,
+        "purpose": profile.purpose,
         "catalogs": {
             "confirmed_planets": {
                 "table": KOI_TABLE,
@@ -449,8 +544,8 @@ def build_manifest(args: argparse.Namespace) -> None:
         "selection": {
             "seed": args.seed,
             "labels": list(LABELS),
-            "class_counts": CLASS_COUNTS,
-            "class_splits": CLASS_SPLITS,
+            "class_counts": profile.class_counts,
+            "class_splits": profile.class_splits,
             "max_period_days": args.max_period,
             "control_definition": "DR25 stellar target without any DR25 KOI or TCE",
             "all_known_koi_and_tce_hosts_excluded_from_controls": True,
@@ -462,6 +557,15 @@ def build_manifest(args: argparse.Namespace) -> None:
         "selected_systems": counts,
         "splits": splits,
     }
+    if excluded_manifest is not None:
+        provenance["leakage_prevention"] = {
+            "excluded_manifest": portable_path(excluded_manifest),
+            "excluded_manifest_sha256": sha256(excluded_manifest),
+            "excluded_systems": len(held_out_kepids),
+            "overlap_after_selection": sum(
+                int(row["kepid"]) in held_out_kepids for row in rows
+            ),
+        }
     planets = sum(int(row["confirmed_planet_count"]) for row in rows)
     detectable_planets = sum(int(row["detectable_planet_count"]) for row in rows)
     multiplanet_systems = sum(
@@ -479,7 +583,7 @@ def build_manifest(args: argparse.Namespace) -> None:
     )
     print(f"{len(rows)} systemes ecrits dans {manifest}")
     print("Classes : " + ", ".join(f"{key}={value}" for key, value in counts.items()))
-    print(f"Planetes confirmees connues dans les 42 systemes : {planets}")
+    print(f"Planetes confirmees connues : {planets}")
     print("Splits  : " + ", ".join(f"{key}={value}" for key, value in splits.items()))
 
 
@@ -589,21 +693,35 @@ def download_light_curves(args: argparse.Namespace) -> None:
         flush=True,
     )
 
-    with ThreadPoolExecutor(max_workers=args.workers) as executor:
+    state_counts = Counter(str(item["status"]) for item in status_by_id.values())
+    with tqdm(
+        total=len(rows),
+        initial=skipped,
+        desc="Courbes MAST",
+        unit="systeme",
+        dynamic_ncols=True,
+    ) as progress, ThreadPoolExecutor(max_workers=args.workers) as executor:
         futures = [executor.submit(fetch_system, row) for row in pending_rows]
         for index, future in enumerate(as_completed(futures), start=1):
             result = future.result()
-            status_by_id[int(result["kepid"])] = result
+            kepid = int(result["kepid"])
+            previous = status_by_id.get(kepid)
+            if previous is not None:
+                state_counts[str(previous["status"])] -= 1
+            status_by_id[kepid] = result
+            state_counts[str(result["status"])] += 1
+            progress.set_postfix(
+                complets=state_counts["ok"],
+                partiels=state_counts["partial"],
+                absents=state_counts["missing"],
+                refresh=False,
+            )
+            progress.update()
             if index == 1 or index % 25 == 0 or index == len(pending_rows):
-                status = list(status_by_id.values())
-                status.sort(key=lambda item: int(item["kepid"]))
-                write_csv(status_path, status)
-                successful = sum(item["status"] == "ok" for item in status)
-                print(
-                    f"[{index}/{len(pending_rows)}] nouveaux; "
-                    f"complets={successful}/{len(rows)}",
-                    flush=True,
+                status = sorted(
+                    status_by_id.values(), key=lambda item: int(item["kepid"])
                 )
+                write_csv(status_path, status)
     print(f"Journal ecrit dans {status_path}")
 
 
@@ -623,10 +741,15 @@ def repair_missing_systems(args: argparse.Namespace) -> None:
     if any(row["label"] != "CONTROL" for row in missing_rows):
         raise ValueError("Un systeme CONFIRMED est sans courbe; remplacement interdit")
 
-    stellar_catalog = root / "source" / "q1_q17_dr25_stellar_kepids.csv"
-    all_tce_catalog = root / "source" / "q1_q17_dr25_all_tce_kepids.csv"
-    all_koi_catalog = root / "source" / "q1_q17_dr25_all_koi_kepids.csv"
+    catalog_root: Path = args.catalog_dir
+    stellar_catalog = catalog_root / "q1_q17_dr25_stellar_kepids.csv"
+    all_tce_catalog = catalog_root / "q1_q17_dr25_all_tce_kepids.csv"
+    all_koi_catalog = catalog_root / "q1_q17_dr25_all_koi_kepids.csv"
     excluded = read_kepids(all_tce_catalog) | read_kepids(all_koi_catalog)
+    profile = DATASET_PROFILES[args.profile]
+    excluded_manifest = args.exclude_manifest or profile.excluded_manifest
+    if excluded_manifest is not None:
+        excluded |= manifest_kepids(excluded_manifest)
     candidates = sorted(
         control_systems(read_kepids(stellar_catalog), excluded),
         key=lambda system: _selection_key(system, args.seed),
@@ -682,13 +805,30 @@ def repair_missing_systems(args: argparse.Namespace) -> None:
 def parser() -> argparse.ArgumentParser:
     command = argparse.ArgumentParser(description=__doc__)
     command.add_argument(
+        "--profile",
+        choices=tuple(DATASET_PROFILES),
+        default="benchmark",
+        help="benchmark rare ou dataset equilibre pour l'apprentissage",
+    )
+    command.add_argument(
         "--dataset-dir",
         type=Path,
-        default=config.DATA_DIR / "kepler_3000",
+        help="remplace le repertoire defini par le profil",
+    )
+    command.add_argument(
+        "--catalog-dir",
+        type=Path,
+        default=config.DATA_DIR / "kepler_3000" / "source",
+        help="cache commun des catalogues NASA",
+    )
+    command.add_argument(
+        "--exclude-manifest",
+        type=Path,
+        help="manifeste dont tous les KIC doivent etre exclus",
     )
     subparsers = command.add_subparsers(dest="command", required=True)
 
-    manifest = subparsers.add_parser("manifest", help="Selectionne les 3 000 systemes")
+    manifest = subparsers.add_parser("manifest", help="Selectionne les systemes")
     manifest.add_argument("--max-period", type=float, default=DEFAULT_MAX_PERIOD_DAYS)
     manifest.add_argument("--seed", type=int, default=DEFAULT_SEED)
     manifest.add_argument("--force-catalog", action="store_true")
@@ -721,6 +861,10 @@ def parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parser().parse_args(argv)
+    if args.dataset_dir is None:
+        args.dataset_dir = (
+            config.DATA_DIR / DATASET_PROFILES[args.profile].directory_name
+        )
     try:
         args.handler(args)
     except (OSError, ValueError, urllib.error.URLError) as error:

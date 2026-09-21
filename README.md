@@ -440,7 +440,7 @@ Ce mécanisme joue le rôle d'un tirage pseudo-aléatoire mais possède deux ava
 
 Il ne faut pas interpréter SHA-256 comme une méthode astronomique : c'est uniquement un moyen reproductible de sélectionner un sous-ensemble.
 
-### 5.6 Répartition entraînement, validation et test
+### 5.6 Ancienne répartition interne du premier dataset
 
 Chaque classe est répartie séparément afin que les trois partitions contiennent des positifs :
 
@@ -450,13 +450,9 @@ Chaque classe est répartie séparément afin que les trois partitions contienne
 | validation | 5 | 445 | 450 |
 | test | 5 | 445 | 450 |
 
-Le rôle des partitions sera particulièrement important pour le réseau de neurones :
+Cette répartition a servi aux premiers essais du BLS. Elle ne doit pas servir à entraîner le réseau de neurones : avec seulement 32 systèmes positifs dans la partie `train`, le réseau n'aurait pas assez d'exemples pour apprendre.
 
-- **entraînement** : ajuster les poids du réseau ;
-- **validation** : choisir l'architecture, les hyperparamètres et le seuil ;
-- **test** : mesurer une seule fois la performance finale.
-
-Le BLS est déterministe, mais son domaine de périodes, son prétraitement, son score et son seuil sont aussi des choix de méthode. Il ne faut donc pas les optimiser sur les mêmes systèmes qui servent à annoncer le résultat final.
+Dans la suite du projet, les **3 000 systèmes complets sont réservés à la comparaison finale**. Le BLS et le réseau seront évalués sur ces mêmes étoiles. Le réseau n'en verra aucune pendant son entraînement.
 
 ### 5.7 Téléchargement des courbes
 
@@ -495,6 +491,24 @@ Le manifeste possède une ligne par KIC. Ses colonnes ne sont pas toutes des ent
 | `quarters` | quarters initialement demandés | non |
 
 Cette table sert donc à organiser l'expérience et à connaître la réponse attendue. Les entrées physiques du BLS viennent des FITS.
+
+### 5.9 Un second dataset pour entraîner le réseau
+
+Un réseau de neurones ne peut pas apprendre à reconnaître un transit avec seulement 42 systèmes positifs. Le script utilise donc un second profil, nommé `training`, qui reprend exactement le même code de sélection et de téléchargement que le premier dataset.
+
+Ce second dataset contient :
+
+| Partition | Confirmés | Contrôles | Total |
+|---|---:|---:|---:|
+| entraînement | 1 200 | 1 200 | 2 400 |
+| validation | 300 | 300 | 600 |
+| **total** | **1 500** | **1 500** | **3 000** |
+
+La proportion de 50 % de positifs ne représente pas la fréquence réelle des planètes. Elle sert uniquement à donner au réseau suffisamment d'exemples des deux classes pendant l'apprentissage.
+
+La séparation entre les deux datasets est stricte : avant de sélectionner le dataset d'entraînement, le programme lit `data/kepler_3000/manifest.csv` et exclut ses 3 000 identifiants KIC. Une même étoile ne peut donc pas être vue pendant l'entraînement puis réapparaître dans la comparaison finale. Le fichier `provenance.json` enregistre le manifeste exclu, son empreinte SHA-256 et le nombre d'éventuels recouvrements, qui doit rester égal à zéro.
+
+Le dataset d'entraînement ne possède volontairement pas de partition `test` : son bloc `validation` sert à choisir l'architecture et les paramètres. Le seul test final est le dataset réaliste `kepler_3000`, commun au BLS et au réseau.
 
 ---
 
@@ -860,14 +874,15 @@ Le futur réseau devra donc améliorer le compromis : retrouver plus de système
 
 La comparaison devra respecter au minimum les règles suivantes :
 
-1. utiliser les mêmes 3 000 KIC et les mêmes labels ;
-2. ne jamais placer deux observations du même KIC dans des partitions différentes ;
-3. commencer avec la même information physique : temps et flux ;
-4. choisir les hyperparamètres et le seuil sans consulter le test final ;
-5. publier la matrice de confusion, la précision, le rappel et F1 ;
-6. comparer aussi les courbes précision-rappel pour ne pas dépendre d'un seul seuil ;
-7. mesurer le temps de calcul et, pour le réseau, le coût de l'entraînement ;
-8. documenter toute représentation imposée au réseau : taille fixe, interpolation, fenêtres ou repliement.
+1. entraîner le réseau uniquement avec `kepler_training` ;
+2. choisir son architecture et ses paramètres avec la partition `validation` de ce dataset ;
+3. ne jamais utiliser les 3 000 KIC de `kepler_3000` pendant ces deux étapes ;
+4. appliquer ensuite le BLS et le réseau aux mêmes 3 000 systèmes de comparaison ;
+5. fournir aux deux méthodes la même information physique : temps et flux ;
+6. publier la matrice de confusion, la précision, le rappel et F1 ;
+7. comparer aussi les courbes précision-rappel pour ne pas dépendre d'un seul seuil ;
+8. mesurer le temps de calcul et, pour le réseau, le coût de l'entraînement ;
+9. documenter toute représentation imposée au réseau : taille fixe, interpolation, fenêtres ou repliement.
 
 Le réseau pourrait être meilleur parce qu'il peut apprendre des formes plus complexes qu'une boîte : bords arrondis, bruit corrélé, variabilité stellaire ou artefacts caractéristiques. Mais cette conclusion ne sera valable que si aucune information du catalogue n'entre accidentellement dans ses données d'entrée.
 
@@ -891,6 +906,27 @@ pip install -r requirements.txt
 ```
 
 Le téléchargement est reprenable. Les fichiers déjà validés ne sont pas téléchargés une seconde fois. L'état est conservé dans `data/kepler_3000/download_status.csv`.
+
+Pour construire le dataset équilibré destiné à l'entraînement du réseau :
+
+```bash
+./data_training.sh
+```
+
+La commande crée d'abord le manifeste, puis télécharge les courbes dans `data/kepler_training/`. Elle peut être relancée après une interruption : les systèmes déjà terminés sont ignorés. Une barre de progression affiche en continu le nombre de systèmes complets, partiels et absents.
+
+Deux commandes partielles sont également disponibles :
+
+```bash
+./data_training.sh manifest
+./data_training.sh download
+```
+
+Le nombre de téléchargements simultanés vaut 4 par défaut et peut être modifié ainsi :
+
+```bash
+DATA_WORKERS=8 ./data_training.sh
+```
 
 ### 11.3 Calculer les scores BLS
 
@@ -939,6 +975,11 @@ Puis ouvrir <http://localhost:8000>. La version publique est déployée automati
 data/kepler_3000/
   manifest.csv                 un système et son label par ligne
   provenance.json             sources, requêtes et paramètres de sélection
+  download_status.csv         état reprenable des téléchargements
+  fits/<KIC>/*.fits            observations, non publiées dans Git
+data/kepler_training/
+  manifest.csv                 1 500 confirmés et 1 500 contrôles
+  provenance.json             preuve d'exclusion du dataset final
   download_status.csv         état reprenable des téléchargements
   fits/<KIC>/*.fits            observations, non publiées dans Git
 

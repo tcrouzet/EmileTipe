@@ -16,3 +16,6 @@ data/kepler_3000/fits/
 data/kepler_3000/download_status.csv
 data/kepler_3000/source/
 data/kepler_3000/legacy_tce_benchmark/
+data/kepler_training/fits/
+data/kepler_training/download_status.csv
+data/kepler_training/source/
