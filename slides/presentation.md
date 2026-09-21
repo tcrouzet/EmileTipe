@@ -55,31 +55,32 @@ Pour chaque système KIC :
 
 ---
 
-## 2. Construire un dataset contrôlé de 3 000 systèmes
+## 2. Deux approches à comparer
 
-<div class="dataset-line compact">
-  <div><strong>3 000</strong><span>systèmes Kepler</span></div>
-  <div><strong>42</strong><span>confirmés</span></div>
-  <div><strong>2 958</strong><span>contrôles</span></div>
-  <div><strong>1,4 %</strong><span>de positifs</span></div>
+<div class="method-grid">
+<article class="method classical">
+  <span class="method-number">A</span>
+  <h3>Box Least Squares</h3>
+  <p>Recherche explicitement une baisse périodique en forme de boîte.</p>
+  <ul>
+    <li>modèle physique lisible ;</li>
+    <li>peu de paramètres ;</li>
+    <li>calcul relativement sobre.</li>
+  </ul>
+</article>
+<article class="method neural">
+  <span class="method-number">B</span>
+  <h3>Réseau de neurones</h3>
+  <p>Apprend les formes utiles directement à partir des courbes.</p>
+  <ul>
+    <li>modèle plus flexible ;</li>
+    <li>entraînement nécessaire ;</li>
+    <li>coût et décisions moins lisibles.</li>
+  </ul>
+</article>
 </div>
 
-<div class="construction-grid">
-<article>
-  <span class="class-tag positive">POSITIFS</span>
-  <h3>Planètes confirmées</h3>
-  <p>Hôtes DR25 ayant au moins une planète confirmée de période ≤ 30 jours.</p>
-  <small>59 planètes connues · 54 dans la plage BLS · 11 systèmes multiples</small>
-</article>
-<article>
-  <span class="class-tag control">CONTRÔLES</span>
-  <h3>Aucun signal catalogué</h3>
-  <p>Cibles stellaires dont on retire tous les hôtes de KOI et de TCE DR25.</p>
-  <small>« Contrôle » ne prouve pas l’absence physique de planète.</small>
-</article>
-</div>
-
-<div class="split-line"><b>Découpage :</b> 2 100 entraînement · 450 validation · 450 test &nbsp;—&nbsp; sélection reproductible, graine 727</div>
+<p class="question">Le gain de détection justifie-t-il la complexité supplémentaire ?</p>
 
 ---
 
