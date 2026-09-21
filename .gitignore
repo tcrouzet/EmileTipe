@@ -1,8 +1,11 @@
+_*
+.DS_Store
+AGENTS.md
+
 .venv/
 node_modules/
 __pycache__/
 *.py[cod]
-.DS_Store
 
 # Donnees volumineuses et resultats intermediaires regenerables
 data/*.csv
