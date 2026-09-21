@@ -1,191 +1,881 @@
-# EmileTipe — détection de transits dans les courbes de lumière de Kepler
+# EmileTipe — détecter des exoplanètes dans les données de Kepler
 
-Ce projet étudie une question simple : **un réseau de neurones peut-il mieux détecter les systèmes planétaires qu'une méthode physique classique, le Box Least Squares (BLS), sur exactement les mêmes observations ?**
+## Question étudiée
 
-La première étape, documentée ici, construit un jeu de 3 000 systèmes Kepler et établit une référence reproductible avec le BLS officiel d'Astropy. Le réseau de neurones sera ajouté dans une étape ultérieure. Il devra utiliser les mêmes systèmes, les mêmes labels et les mêmes partitions afin que la comparaison soit scientifiquement interprétable.
+Le but du projet est de comparer deux méthodes sur **exactement les mêmes observations** :
 
-Le [tableau de bord public](https://tcrouzet.github.io/EmileTipe/) contenu dans `web/` présente les résultats système par système et la matrice de confusion du BLS.
+1. le **Box Least Squares** (BLS), méthode classique conçue spécialement pour rechercher des transits planétaires ;
+2. un **réseau de neurones**, qui sera développé dans une deuxième étape.
 
-## 1. Que contiennent les données Kepler ?
+La question n'est pas simplement « quelle méthode donne le plus grand pourcentage ? ». Elle est plus précise :
 
-### 1.1 De l'image du télescope à la courbe de lumière
+> Sur un ensemble réaliste contenant très peu de systèmes planétaires, un réseau de neurones retrouve-t-il davantage de planètes que le BLS sans produire trop de fausses alertes ?
 
-Le télescope spatial Kepler a mesuré de manière répétée la lumière reçue de plus de 150 000 étoiles. Il ne fournit pas directement une réponse « planète » ou « pas de planète ». Pour chaque étoile, il fournit principalement une **série temporelle photométrique** : à chaque instant `t`, on associe un flux lumineux `F(t)`.
+La première version du projet construit donc un dataset commun de 3 000 systèmes Kepler, applique un BLS fondé sur Astropy et mesure ses performances. Ce résultat sera la référence à battre.
 
-Un transit se produit quand une planète passe entre l'étoile et l'observateur. Le flux baisse alors pendant quelques heures, puis retrouve son niveau habituel. Dans le cas simple d'une planète petite devant une étoile uniformément lumineuse, la profondeur relative du transit est approximativement :
+Le [tableau de bord public](https://tcrouzet.github.io/EmileTipe/) permet d'examiner les résultats système par système.
+
+## Vue d'ensemble : du télescope à la décision
+
+Avant d'entrer dans les détails, voici toute la chaîne de traitement :
 
 ```text
-δ = (F_hors transit - F_transit) / F_hors transit ≈ (R_planète / R_étoile)²
+Lumière d'une étoile
+        │
+        ▼
+Mesures Kepler : date + flux lumineux
+        │
+        ▼
+Fichiers FITS de plusieurs quarters
+        │
+        ├──────────────► catalogues NASA ──► label connu
+        │                                      │
+        ▼                                      │
+Nettoyage et normalisation                     │
+        │                                      │
+        ▼                                      │
+Deux vecteurs : temps tᵢ et flux yᵢ            │
+        │                                      │
+        ▼                                      │
+BLS : recherche d'une baisse périodique        │
+        │                                      │
+        ▼                                      │
+Score puis décision « détecté / non détecté »  │
+        │                                      │
+        └──────── comparaison au label ◄───────┘
 ```
 
-Une planète de période orbitale `P` produit donc une baisse de flux répétée aux dates `t₀ + nP`. L'objet étudié par le BLS n'est ni une photographie ni un tableau déjà classé : c'est l'ensemble des couples irrégulièrement espacés `(temps, flux)` mesurés pour une étoile.
+Il faut retenir une séparation essentielle :
 
-### 1.2 Un fichier FITS correspond à un segment d'observation
+- le BLS reçoit les **mesures de temps et de flux** ;
+- le label issu des catalogues n'est utilisé qu'après le calcul, pour vérifier si la réponse est juste.
 
-Les observations sont téléchargées depuis [MAST — Kepler Mission](https://archive.stsci.edu/missions-and-data/kepler) dans le format astronomique FITS. Kepler découpe sa mission en **quarters**, des campagnes d'environ trois mois. Un fichier `*_llc.fits` contient la courbe d'une étoile pendant un quarter en cadence longue (*long cadence*), soit une intégration toutes les **29,4 minutes** environ.
+La période connue d'une planète, son nom et sa durée cataloguée ne sont jamais donnés au BLS pour l'aider à chercher. Les utiliser comme entrée serait une fuite de la réponse attendue.
 
-Chaque fichier comprend trois parties, appelées HDU :
+---
 
-| HDU | Contenu |
+## 1. Que mesure le télescope Kepler ?
+
+### 1.1 Une étoile devient une série de nombres
+
+Kepler a observé continuellement plus de 150 000 étoiles. Pour chaque étoile, le télescope mesure la lumière reçue à intervalles réguliers.
+
+Une observation élémentaire peut être représentée par un couple :
+
+```text
+(date de la mesure, flux lumineux mesuré)
+```
+
+En répétant la mesure, on obtient une **série temporelle** :
+
+```text
+(t₁, F₁), (t₂, F₂), …, (tₙ, Fₙ)
+```
+
+où :
+
+- `tᵢ` est la date de la mesure numéro `i` ;
+- `Fᵢ` est le flux reçu à cette date ;
+- `n` est le nombre de mesures disponibles.
+
+La grandeur intéressante n'est donc pas le flux à une date isolée, mais son évolution au cours du temps. La représentation graphique de `F` en fonction de `t` est appelée **courbe de lumière**.
+
+### 1.2 Pourquoi un transit fait-il baisser le flux ?
+
+Une planète n'émet presque pas de lumière visible par rapport à son étoile. Mais si son orbite est correctement orientée, elle peut passer devant l'étoile vue depuis le télescope. Elle masque alors une partie de la surface lumineuse : c'est un **transit**.
+
+On note :
+
+- `F₀` le flux habituel hors transit ;
+- `Fₜ` le flux mesuré pendant le transit ;
+- `Rₚ` le rayon de la planète ;
+- `R★` le rayon de l'étoile.
+
+La profondeur relative du transit est :
+
+```text
+δ = (F₀ - Fₜ) / F₀
+```
+
+Dans un modèle géométrique simple, le rapport de surface masquée donne :
+
+```text
+δ ≈ (Rₚ / R★)²
+```
+
+Exemple : si le rayon de la planète vaut 10 % du rayon de l'étoile, alors :
+
+```text
+δ ≈ 0,1² = 0,01 = 1 %
+```
+
+Le flux baisse donc d'environ 1 %. Pour une petite planète, la baisse peut être bien plus faible et devenir comparable au bruit de mesure ou à la variabilité naturelle de l'étoile.
+
+### 1.3 Les trois informations caractéristiques d'un transit
+
+Une suite de transits est principalement décrite par trois nombres :
+
+| Grandeur | Symbole | Signification |
+|---|---:|---|
+| période | `P` | temps entre deux transits successifs |
+| époque | `t₀` | date choisie comme centre d'un transit |
+| durée | `D` | temps écoulé entre le début et la fin du transit |
+
+Les centres des transits doivent se trouver approximativement aux dates :
+
+```text
+t₀, t₀ + P, t₀ + 2P, …, t₀ + kP
+```
+
+La profondeur informe sur le rapport des rayons. La période informe sur l'orbite. La répétition est fondamentale : une baisse isolée peut être un défaut instrumental, tandis qu'une baisse de forme semblable revenant régulièrement est plus compatible avec une orbite.
+
+### 1.4 Pourquoi toute planète ne produit-elle pas un signal visible ?
+
+Même une planète réelle peut être absente de la courbe ou impossible à détecter :
+
+- son orbite ne passe pas devant l'étoile depuis notre ligne de visée ;
+- son transit est trop peu profond par rapport au bruit ;
+- sa période est trop longue pour observer plusieurs passages ;
+- un transit tombe dans une interruption des observations ;
+- l'étoile possède elle-même des variations de luminosité ;
+- le prétraitement peut atténuer le signal.
+
+Ainsi, « planète confirmée » ne signifie pas automatiquement « transit facile à retrouver dans les trois segments utilisés ici ».
+
+---
+
+## 2. À quoi ressemble un fichier Kepler ?
+
+### 2.1 Quarters et cadence
+
+La mission est découpée en **quarters**, c'est-à-dire en périodes d'observation d'environ trois mois. Kepler devait pivoter régulièrement, ce qui changeait la position des étoiles sur le détecteur. Les données sont donc fournies séparément pour chaque quarter.
+
+Le projet utilise les fichiers de **cadence longue** dont le nom se termine par `*_llc.fits`. Une mesure est intégrée environ toutes les 29,4 minutes :
+
+```text
+29,4 min ≈ 0,0204 jour
+```
+
+Un quarter de 90 jours contient théoriquement environ :
+
+```text
+90 / 0,0204 ≈ 4 400 mesures
+```
+
+Le nombre réel est inférieur à cause des interruptions, des valeurs absentes et des mesures signalées comme mauvaises.
+
+### 2.2 Le format FITS
+
+Les données sont téléchargées depuis [MAST](https://archive.stsci.edu/missions-and-data/kepler) au format FITS, format standard de l'astronomie. Un fichier de courbe Kepler contient trois blocs appelés **HDU** :
+
+| Bloc | Ce qu'il contient |
 |---|---|
-| `PRIMARY` | métadonnées de la cible : identifiant KIC, quarter, position céleste, magnitude Kepler… |
-| `LIGHTCURVE` | table temporelle : une ligne par cadence et 20 colonnes de mesure |
-| `APERTURE` | masque de pixels employé pour la photométrie |
+| `PRIMARY` | informations sur la cible : identifiant, quarter, coordonnées, magnitude… |
+| `LIGHTCURVE` | tableau contenant une ligne par mesure temporelle |
+| `APERTURE` | masque des pixels utilisés pour calculer le flux |
 
-Les colonnes de `LIGHTCURVE` se répartissent en plusieurs familles :
+Le tableau `LIGHTCURVE` standard possède 20 colonnes. Elles ne sont pas toutes utilisées dans ce projet.
 
-| Famille | Variables principales | Signification |
+### 2.3 Les familles de variables disponibles
+
+| Famille | Colonnes | Rôle |
 |---|---|---|
-| Temps | `TIME`, `TIMECORR`, `CADENCENO` | date barycentrique, correction temporelle et numéro de cadence |
-| Photométrie brute | `SAP_FLUX`, `SAP_FLUX_ERR` | flux mesuré dans l'ouverture et son incertitude |
-| Fond | `SAP_BKG`, `SAP_BKG_ERR` | estimation de la lumière de fond |
-| Photométrie corrigée | `PDCSAP_FLUX`, `PDCSAP_FLUX_ERR` | flux après correction des tendances instrumentales par le pipeline PDC |
-| Qualité | `SAP_QUALITY` | masque de bits signalant les cadences affectées par un incident |
-| Position | `PSF_CENTR*`, `MOM_CENTR*`, `POS_CORR*` | position de l'image de l'étoile sur le détecteur |
+| temps | `TIME`, `TIMECORR`, `CADENCENO` | dater et numéroter les mesures |
+| flux d'ouverture | `SAP_FLUX`, `SAP_FLUX_ERR` | flux extrait directement des pixels et incertitude |
+| fond lumineux | `SAP_BKG`, `SAP_BKG_ERR` | estimation du fond et incertitude |
+| flux corrigé | `PDCSAP_FLUX`, `PDCSAP_FLUX_ERR` | flux corrigé des tendances instrumentales connues |
+| qualité | `SAP_QUALITY` | indicateur binaire des problèmes détectés |
+| position | `PSF_CENTR*`, `MOM_CENTR*`, `POS_CORR*` | position de l'image de l'étoile sur le capteur |
 
-`TIME` est exprimé en jours BKJD (*Barycentric Kepler Julian Date*) :
+Le détail officiel se trouve dans le [Kepler Archive Manual](https://archive.stsci.edu/kepler/manuals/archive_manual.pdf).
+
+### 2.4 Les trois colonnes effectivement utilisées
+
+Le programme lit seulement :
+
+#### `TIME`
+
+`TIME` est la date barycentrique exprimée en jours BKJD :
 
 ```text
 BKJD = BJD - 2 454 833
 ```
 
-`PDCSAP_FLUX` est exprimé en électrons par seconde (`e⁻/s`). Le pipeline de ce projet n'utilise que trois colonnes :
+Soustraire cette constante évite d'enregistrer de très grands nombres. Une valeur `TIME = 352,4` signifie donc environ 352,4 jours après l'origine temporelle choisie par Kepler.
 
-- `TIME`, qui préserve les dates réelles et donc les interruptions d'observation ;
-- `PDCSAP_FLUX`, choisi plutôt que `SAP_FLUX` parce qu'il est déjà corrigé d'une partie des effets instrumentaux communs ;
-- `SAP_QUALITY`, utilisé pour ne conserver que les lignes de qualité nulle.
+Les dates sont conservées. Si Kepler n'observe rien pendant plusieurs jours, le trou reste visible dans les valeurs de `TIME`.
 
-Les incertitudes `PDCSAP_FLUX_ERR`, les positions et le fond ne sont actuellement **pas fournis au BLS**. C'est un choix méthodologique explicite et une limite : un futur modèle pourra éventuellement exploiter ces variables, mais il faudra alors distinguer le gain dû à l'algorithme du gain dû à des entrées supplémentaires. La structure des FITS est détaillée dans le [Kepler Archive Manual](https://archive.stsci.edu/kepler/manuals/archive_manual.pdf).
+#### `PDCSAP_FLUX`
 
-### 1.3 Qu'est-ce qu'un « système » dans ce projet ?
+Cette colonne contient le flux en électrons par seconde (`e⁻/s`). `PDC` signifie *Pre-search Data Conditioning* : le pipeline Kepler a déjà cherché à corriger plusieurs tendances instrumentales communes.
 
-Un système est une étoile identifiée par son **Kepler Input Catalog ID** (`KIC`). Il peut contenir zéro, une ou plusieurs planètes connues. Jusqu'à trois fichiers trimestriels sont associés à chaque KIC, puis leurs points sont réunis en une seule série de longueur variable :
+Le flux `SAP_FLUX`, plus brut, est disponible mais n'est pas utilisé. Le choix de `PDCSAP_FLUX` permet de commencer avec une courbe déjà calibrée pour la recherche de transits.
 
-```text
-système KIC = [(t₁, F₁), (t₂, F₂), …, (tₙ, Fₙ)] + métadonnées + label
-```
+#### `SAP_QUALITY`
 
-Les segments ne sont pas recollés artificiellement dans le temps : les trous entre quarters ou entre cadences restent présents dans `TIME`. En revanche, chaque segment est divisé par son propre flux médian avant concaténation :
+Cette valeur indique si la mesure a subi un événement connu : perte de pointage, rayon cosmique, réaction de la sonde, etc. Le programme conserve uniquement :
 
 ```text
-flux_relatif(t) = PDCSAP_FLUX(t) / médiane_du_quarter - 1
+SAP_QUALITY = 0
 ```
 
-Le flux relatif vaut donc approximativement zéro hors transit ; un transit apparaît comme une petite excursion négative.
+Cela signifie qu'aucun indicateur de qualité n'est levé pour cette cadence.
 
-Exemple réel, le système positif **KIC 5542466 / Kepler-1756**, dont la planète connue a une période de 2,35574505 jours et une durée de transit cataloguée de 1,796 heure :
+### 2.5 Exemple d'une ligne réelle
 
-| Quarter | Lignes FITS | Mesures valides retenues | Intervalle BKJD | Flux médian |
+Voici une mesure du quarter Q4 de l'étoile KIC 5542466 :
+
+| Variable | Valeur |
+|---|---:|
+| `TIME` | 352,3970285 BKJD |
+| `PDCSAP_FLUX` | 7 653,161 e⁻/s |
+| `SAP_QUALITY` | 0 |
+
+Le flux médian de ce quarter vaut 7 663,471 e⁻/s. La première normalisation calcule :
+
+```text
+7 653,161 / 7 663,471 - 1 ≈ -0,00135
+```
+
+La mesure se trouve donc environ 0,135 % sous le niveau médian du quarter. Une seule valeur négative ne prouve rien : il faut vérifier si des baisses analogues se répètent périodiquement.
+
+### 2.6 Quelles variables ne sont pas utilisées ?
+
+Le BLS actuel n'utilise ni l'incertitude `PDCSAP_FLUX_ERR`, ni le fond, ni les positions sur le capteur. Au terme du prétraitement, son entrée contient uniquement :
+
+```text
+temps = [t₁, t₂, …, tₙ]
+flux  = [y₁, y₂, …, yₙ]
+```
+
+Cette précision est importante pour la comparaison future. Si un réseau reçoit davantage de variables, une amélioration pourra venir des informations supplémentaires et pas seulement de l'architecture neuronale. La comparaison principale devra donc commencer avec les mêmes informations physiques.
+
+---
+
+## 3. Qu'appelle-t-on un système dans ce projet ?
+
+### 3.1 Une étoile, pas une ligne et pas une planète
+
+Chaque étoile du catalogue Kepler possède un identifiant `KIC` (*Kepler Input Catalog*). L'unité classée par le projet est cette étoile :
+
+```text
+un exemple du dataset = un identifiant KIC = un système stellaire
+```
+
+Un même système peut contenir plusieurs planètes. Il reste pourtant un seul exemple de classification :
+
+```text
+« au moins une planète confirmée recherchable »
+ou
+« aucune signature KOI/TCE cataloguée »
+```
+
+On ne crée donc pas plusieurs courbes identiques lorsqu'une étoile possède plusieurs planètes.
+
+### 3.2 Plusieurs fichiers forment une seule courbe
+
+Le programme cherche jusqu'à trois quarters pour chaque KIC. Il lit leurs mesures valides, normalise chaque quarter, rassemble les points et les trie par date.
+
+La représentation d'un système est donc :
+
+```text
+KIC
+ ├── quarter A : (t₁, F₁), …
+ ├── quarter B : (tⱼ, Fⱼ), …
+ └── quarter C : (tₖ, Fₖ), …
+
+après concaténation : [(t₁, y₁), …, (tₙ, yₙ)]
+```
+
+La longueur `n` varie d'une étoile à l'autre. Les trous temporels ne sont pas remplacés par des valeurs inventées.
+
+### 3.3 Exemple complet : KIC 5542466
+
+KIC 5542466 est l'hôte de la planète confirmée Kepler-1756 b. Le catalogue donne :
+
+- période : 2,35574505 jours ;
+- durée du transit : 1,796 heure ;
+- partition du dataset : test.
+
+Trois fichiers ont été obtenus :
+
+| Quarter | Lignes du FITS | Lignes conservées | Dates BKJD | Flux médian |
 |---:|---:|---:|---:|---:|
-| Q4 | 4 397 | 3 870 | 352,40–442,20 | 7 663,47 e⁻/s |
-| Q5 | 4 634 | 4 231 | 443,92–537,63 | 8 109,93 e⁻/s |
-| Q7 | 4 375 | 3 638 | 630,22–719,55 | 7 620,17 e⁻/s |
-| **Système complet** | **13 406** | **11 739** | trois segments | série de 11 739 couples `(t, F)` |
+| Q4 | 4 397 | 3 870 | 352,40 à 442,20 | 7 663,47 e⁻/s |
+| Q5 | 4 634 | 4 231 | 443,92 à 537,63 | 8 109,93 e⁻/s |
+| Q7 | 4 375 | 3 638 | 630,22 à 719,55 | 7 620,17 e⁻/s |
+| **total** | **13 406** | **11 739** | trois segments | 11 739 couples `(tᵢ, yᵢ)` |
 
-Q7 remplace ici Q6, indisponible pour cette cible. Cet exemple montre pourquoi les systèmes n'ont pas tous le même nombre de points et pourquoi une courbe Kepler contient des trous. Le BLS accepte directement ces temps irréguliers. Un réseau de neurones exigera plus tard une décision supplémentaire documentée : rééchantillonnage, découpage en fenêtres ou architecture acceptant les longueurs variables.
+Q6 n'était pas disponible pour cette étoile ; Q7 a été utilisé comme remplacement. C'est la raison du grand trou entre les deuxième et troisième segments.
 
 ![Courbe de lumière réelle du système KIC 5542466, avant et après repliement à la période orbitale](docs/kic-5542466-light-curve.png)
 
-Le panneau supérieur représente le flux relatif réellement fourni au début du traitement : trois plages d'observation sont visibles, séparées par des lacunes. À cette échelle, les transits de quelques heures sont presque invisibles. Le panneau inférieur superpose toutes les orbites en ramenant chaque mesure à sa phase dans une période de 2,355745 jours. La baisse cohérente autour de la phase zéro devient alors visible ; c'est précisément l'information périodique recherchée par le BLS. La ligne rouge est une médiane par intervalle de phase, uniquement ajoutée pour rendre la figure lisible.
+Comment lire la figure :
 
-## 2. Comment le dataset de 3 000 systèmes est-il construit ?
+1. le panneau supérieur montre le flux relatif en fonction de la date ;
+2. les variations longues et les lacunes sont nettement visibles ;
+3. le transit, qui ne dure que 1,796 heure, est difficile à voir sur plusieurs centaines de jours ;
+4. le panneau inférieur replie tous les points à la période connue uniquement pour illustrer le phénomène ;
+5. les transits successifs se retrouvent alors autour de la même abscisse, zéro heure ;
+6. la médiane rouge fait apparaître la baisse commune au milieu.
 
-### 2.1 Les catégories astronomiques de Kepler
+La période connue utilisée pour cette figure n'est pas donnée au BLS. Dans l'expérience, le BLS doit la retrouver seul en essayant de nombreuses périodes.
 
-Il faut distinguer les catégories des catalogues de celles retenues pour l'expérience :
+---
 
-| Catégorie astronomique | Définition | Utilisation ici |
+## 4. Que signifient TCE, KOI, candidat et confirmé ?
+
+Ces mots décrivent des étapes successives, pas des synonymes.
+
+### 4.1 Cible Kepler
+
+Une **cible** est simplement une étoile observée. À ce stade, aucune planète n'est supposée.
+
+### 4.2 TCE : un signal automatique
+
+Un **TCE** (*Threshold Crossing Event*) est un signal périodique qui franchit le seuil du pipeline automatique Kepler. Cela signifie : « le calcul a trouvé quelque chose d'assez significatif pour être enregistré ».
+
+Un TCE n'est pas encore une planète. Une binaire à éclipses, du bruit ou un artefact peuvent produire un signal périodique.
+
+### 4.3 KOI : un objet étudié plus sérieusement
+
+Un **KOI** (*Kepler Object of Interest*) est un objet retenu pour une analyse plus approfondie. Un KOI reçoit une disposition, notamment :
+
+- `CANDIDATE` : le signal reste compatible avec une planète, sans confirmation définitive ;
+- `FALSE POSITIVE` : une autre explication a été retenue ;
+- `CONFIRMED` : la nature planétaire est confirmée.
+
+### 4.4 CONTROL : une catégorie créée ici
+
+`CONTROL` n'est pas une disposition officielle de planète. Dans ce projet, un contrôle est une cible du catalogue stellaire DR25 qui n'apparaît chez **aucun hôte KOI et aucun hôte TCE DR25**.
+
+La progression peut se résumer ainsi :
+
+```text
+cible observée
+   │
+   ├── aucun TCE/KOI catalogué ──► peut devenir CONTROL dans ce projet
+   │
+   └── signal TCE
+          │
+          └── éventuellement KOI
+                 ├── CANDIDATE
+                 ├── FALSE POSITIVE
+                 └── CONFIRMED ──► peut devenir positif dans ce projet
+```
+
+Il serait incorrect de mettre les faux positifs ou les candidats dans les contrôles : leur courbe contient justement un signal ressemblant parfois fortement à un transit. Ils formeraient une autre question scientifique, celle du *vetting* des candidats.
+
+Il serait également incorrect d'affirmer que les contrôles ne possèdent aucune planète. Ils ne possèdent **aucun signal catalogué dans les tables utilisées**. Une planète non transitante ou trop faible peut toujours être présente.
+
+---
+
+## 5. Comment le dataset de 3 000 systèmes est-il construit ?
+
+### 5.1 Sources utilisées
+
+Le script `script/dataset/build.py` croise quatre sources NASA :
+
+| Source | Information extraite | Utilité |
 |---|---|---|
-| **Cible Kepler** | étoile observée par Kepler | population de départ |
-| **TCE** (*Threshold Crossing Event*) | signal périodique ayant franchi le seuil du pipeline de détection | tous ses hôtes sont exclus des contrôles |
-| **KOI** (*Kepler Object of Interest*) | TCE retenu pour une analyse astronomique plus poussée | tous ses hôtes sont exclus des contrôles |
-| **CANDIDATE** | KOI compatible avec une planète, mais non confirmé | non utilisé comme positif ou négatif |
-| **FALSE POSITIVE** | KOI attribué à une autre cause : binaire à éclipses, contamination, artefact… | non utilisé comme contrôle |
-| **CONFIRMED** | planète dont la nature a été confirmée | source de la classe positive |
-| **CONTROL** | catégorie créée pour ce projet : cible sans aucun KOI ni TCE DR25 | classe négative expérimentale |
+| table `q1_q17_dr25_koi`, disposition `CONFIRMED` | KIC, noms, périodes, époques et durées | construire les positifs |
+| table complète `q1_q17_dr25_koi` | tous les KIC possédant un KOI | les exclure des contrôles |
+| table `q1_q17_dr25_tce` | tous les KIC possédant un TCE | les exclure des contrôles |
+| table `q1_q17_dr25_stellar` | tous les KIC stellaires observés | population de départ des contrôles |
 
-Le mot `CONTROL` ne signifie donc pas « étoile dont on sait qu'elle ne possède aucune planète ». Il signifie plus précisément « aucune signature n'a été enregistrée comme KOI ou TCE dans DR25 ». Une planète trop petite, trop longue, non transitante ou manquée par le pipeline peut exister autour d'un contrôle. C'est une incertitude de label inévitable dans ce type d'étude.
+Les observations FITS sont ensuite téléchargées depuis MAST. Les requêtes exactes et les empreintes SHA-256 des fichiers sources sont conservées dans `data/kepler_3000/provenance.json`.
 
-### 2.2 Sources des labels et des observations
+Le dataset Kaggle téléchargé au début du projet n'est plus utilisé comme vérité terrain. Il contient des courbes déjà transformées et des labels de candidats. Cela empêchait de définir proprement les négatifs et de repartir des mêmes observations brutes pour les deux méthodes.
 
-Quatre tables publiques sont croisées :
+### 5.2 Construction de la classe positive
 
-- [Kepler DR25 KOI](https://exoplanetarchive.ipac.caltech.edu/docs/API_kepcandidate_columns.html), interrogée avec `koi_disposition = 'CONFIRMED'` pour les positifs ;
-- la même table KOI sans filtre, afin d'exclure des contrôles tous les candidats et faux positifs connus ;
-- [Kepler DR25 TCE](https://exoplanetarchive.ipac.caltech.edu/docs/API_kepcandidate_columns.html), afin d'exclure tout hôte possédant un événement détecté, même non devenu KOI ;
-- le catalogue stellaire `q1_q17_dr25_stellar`, qui fournit la population des cibles observées.
+Le script procède dans cet ordre :
 
-Les courbes correspondantes sont ensuite obtenues depuis MAST. Les URL exactes, les requêtes et les empreintes SHA-256 des catalogues téléchargés sont conservées dans `data/kepler_3000/provenance.json`.
+1. il lit tous les événements dont `koi_disposition = 'CONFIRMED'` ;
+2. il les regroupe par KIC, car plusieurs planètes peuvent tourner autour de la même étoile ;
+3. il garde un système si au moins une de ses planètes confirmées a une période inférieure ou égale à 30 jours ;
+4. il obtient ainsi 1 610 systèmes éligibles avant sous-échantillonnage ;
+5. il en sélectionne 42 de manière déterministe.
 
-Le dataset Kaggle *Kepler Labelled Time Series Data*, téléchargé initialement dans `data/`, n'est pas la vérité terrain de cette expérience. Il contient des courbes déjà transformées et des labels de candidats. Il ne permet pas de repartir des mêmes FITS ni de définir aussi strictement la population de contrôle.
+Pourquoi imposer `P ≤ 30 jours` ? Parce que le BLS ne recherche que les périodes comprises entre 0,5 et 30 jours. Mettre dans la classe positive uniquement des planètes hors de cette plage rendrait leur détection impossible par construction.
 
-### 2.3 Sélection des deux classes
+Les 42 systèmes retenus contiennent :
 
-L'unité statistique est le système KIC, et non chaque planète. La construction applique les étapes suivantes :
+- 59 planètes confirmées au total ;
+- 54 planètes dont la période est inférieure ou égale à 30 jours ;
+- 11 systèmes contenant plusieurs planètes confirmées.
 
-1. regrouper par KIC tous les KOI de disposition `CONFIRMED` ;
-2. rendre positif tout système possédant au moins une planète confirmée de période `P ≤ 30 jours` ;
-3. former la population de contrôle à partir des cibles stellaires après retrait de **tous** les hôtes KOI, TCE ou confirmés ;
-4. classer chaque population par une clé SHA-256 dépendant de la graine `727`, puis prendre les effectifs fixés ;
-5. répartir séparément chaque classe entre entraînement, validation et test, toujours avec cette clé déterministe.
+### 5.3 Construction de la classe de contrôle
 
-Avant échantillonnage, 1 610 systèmes confirmés satisfont le critère de période et 182 762 contrôles satisfont le critère d'exclusion. Le sous-ensemble final est volontairement très déséquilibré :
+Le script part des cibles du catalogue stellaire, puis retire :
 
-| Label du dataset | Sens exact | Systèmes |
-|---|---|---:|
-| `CONFIRMED` | ≥ 1 planète confirmée avec `P ≤ 30 jours` | 42 |
-| `CONTROL` | cible DR25 sans aucun KOI ni TCE DR25 | 2 958 |
-| **Total** |  | **3 000** |
+1. tout KIC apparaissant dans la table KOI, quelle que soit sa disposition ;
+2. tout KIC apparaissant dans la table TCE ;
+3. tout hôte confirmé, par sécurité explicite.
 
-Les 42 positifs contiennent 59 planètes confirmées au total : 54 sont dans le domaine `P ≤ 30 jours` du BLS, et 11 étoiles sont multiplanétaires. La prévalence des systèmes positifs vaut 42/3 000 = **1,4 %**. Cette rareté est un aspect central de l'expérience : même un faible taux de fausses alertes peut alors dégrader fortement la précision.
+Après ces exclusions, il reste 182 762 contrôles éligibles. Le script en sélectionne 2 958.
 
-### 2.4 Découpage expérimental
+Cette règle est volontairement plus stricte que « aucune planète confirmée ». Une étoile candidate n'est pas utilisée comme contrôle.
 
-| Partition | Confirmés | Contrôles | Total | Rôle prévu |
-|---|---:|---:|---:|---|
-| entraînement | 32 | 2 068 | 2 100 | ajustement d'une méthode apprenante |
-| validation | 5 | 445 | 450 | choix des hyperparamètres et du seuil |
-| test | 5 | 445 | 450 | mesure finale indépendante |
+### 5.4 Pourquoi seulement 42 positifs ?
 
-Pour la référence BLS actuellement affichée, les 3 000 scores sont également évalués par validation croisée à six plis : le seuil de chaque pli est choisi sans consulter les systèmes évalués dans ce pli. Cette seconde représentation permet d'obtenir une décision hors pli pour chaque système. Lors de la comparaison finale avec le réseau, le protocole devra être figé avant de consulter le test.
+Le projet cherche à reproduire une situation où les systèmes détectables sont rares. Les effectifs sont :
 
-### 2.5 Sélection des segments de courbe
+| Classe | Nombre | Proportion |
+|---|---:|---:|
+| `CONFIRMED` | 42 | 1,4 % |
+| `CONTROL` | 2 958 | 98,6 % |
+| **total** | **3 000** | **100 %** |
 
-Le téléchargement cherche d'abord les quarters Q4, Q5 et Q6 pour obtenir trois intervalles comparables. Lorsqu'un de ces fichiers n'existe pas, il cherche un remplacement dans Q1–Q3 puis Q7–Q17. Au maximum trois fichiers sont conservés par système.
+Si le dataset contenait 1 500 positifs et 1 500 négatifs, la précision serait artificiellement plus facile à obtenir. Dans une recherche réelle, une méthode rencontre surtout des étoiles sans signal catalogué. Le déséquilibre fait donc partie de la question étudiée.
 
-| Nombre de fichiers FITS disponibles | Systèmes |
+### 5.5 Sélection déterministe
+
+La sélection utilise la graine `727`. Pour chaque KIC, le programme calcule une clé SHA-256 à partir de la graine, du label et de l'identifiant, puis trie les systèmes selon cette clé.
+
+Ce mécanisme joue le rôle d'un tirage pseudo-aléatoire mais possède deux avantages :
+
+- une nouvelle exécution choisit exactement les mêmes systèmes ;
+- le choix ne dépend pas de l'ordre des lignes renvoyées par le serveur.
+
+Il ne faut pas interpréter SHA-256 comme une méthode astronomique : c'est uniquement un moyen reproductible de sélectionner un sous-ensemble.
+
+### 5.6 Répartition entraînement, validation et test
+
+Chaque classe est répartie séparément afin que les trois partitions contiennent des positifs :
+
+| Partition | Confirmés | Contrôles | Total |
+|---|---:|---:|---:|
+| entraînement | 32 | 2 068 | 2 100 |
+| validation | 5 | 445 | 450 |
+| test | 5 | 445 | 450 |
+
+Le rôle des partitions sera particulièrement important pour le réseau de neurones :
+
+- **entraînement** : ajuster les poids du réseau ;
+- **validation** : choisir l'architecture, les hyperparamètres et le seuil ;
+- **test** : mesurer une seule fois la performance finale.
+
+Le BLS est déterministe, mais son domaine de périodes, son prétraitement, son score et son seuil sont aussi des choix de méthode. Il ne faut donc pas les optimiser sur les mêmes systèmes qui servent à annoncer le résultat final.
+
+### 5.7 Téléchargement des courbes
+
+Pour chaque KIC, le script demande d'abord Q4, Q5 et Q6. Si un fichier manque, il cherche un remplacement dans Q1, Q2, Q3, puis Q7 à Q17. Il conserve au maximum trois fichiers.
+
+La couverture finale est :
+
+| Fichiers FITS disponibles | Systèmes |
 |---:|---:|
 | 3 | 2 786 |
 | 2 | 97 |
 | 1 | 117 |
 | 0 | 0 |
 
-Tous les positifs disposent de trois fichiers. Les différences de couverture constituent néanmoins un biais possible : une série plus courte contient moins de transits observables. Les observations occupent environ 9,2 Go et ne sont pas versionnées dans Git.
+Tous les positifs ont trois fichiers. Certains contrôles ont une couverture plus courte, ce qui constitue un biais possible : avec moins de jours observés, on a moins de chances de voir plusieurs événements périodiques.
 
-### 2.6 Contenu du manifeste
+Les FITS occupent environ 9,2 Go. Ils ne sont pas publiés dans Git, mais chaque observation peut être retéléchargée depuis sa source.
 
-`data/kepler_3000/manifest.csv` contient une ligne par système :
+### 5.8 Que contient `manifest.csv` ?
 
-| Variable | Sens |
+Le manifeste possède une ligne par KIC. Ses colonnes ne sont pas toutes des entrées de l'algorithme :
+
+| Colonne | Sens | Donnée au BLS ? |
+|---|---|---:|
+| `kepid` | identifiant de l'étoile | seulement pour retrouver ses fichiers |
+| `label` | `CONFIRMED` ou `CONTROL` | non, utilisé pour l'évaluation |
+| `has_confirmed_planet` | version binaire du label | non |
+| `confirmed_planet_count` | nombre total de planètes confirmées | non |
+| `detectable_planet_count` | nombre de planètes avec `P ≤ 30 j` | non |
+| `confirmed_planet_names` | noms officiels | non |
+| `split` | partition expérimentale | non |
+| `signal_count` | signaux recherchables connus | non |
+| `periods_days` | périodes cataloguées | non, seulement pour vérifier la période trouvée |
+| `epochs_bkjd` | centres de transit catalogués | non |
+| `durations_hours` | durées cataloguées | non |
+| `quarters` | quarters initialement demandés | non |
+
+Cette table sert donc à organiser l'expérience et à connaître la réponse attendue. Les entrées physiques du BLS viennent des FITS.
+
+---
+
+## 6. Comment la courbe est-elle préparée ?
+
+Le BLS fonctionne mieux si le niveau moyen et les variations très lentes ont été retirés. Le prétraitement doit cependant éviter d'effacer les transits courts.
+
+### Étape 1 — retirer les mesures invalides
+
+Pour chaque quarter, une ligne est conservée si :
+
+```text
+TIME est fini
+PDCSAP_FLUX est fini
+SAP_QUALITY = 0
+```
+
+### Étape 2 — mettre les quarters au même niveau
+
+Le flux absolu peut différer entre quarters. Pour chaque quarter, on calcule sa médiane `M`, puis :
+
+```text
+rᵢ = Fᵢ / M - 1
+```
+
+Interprétation :
+
+- `rᵢ = 0` : flux égal à la médiane ;
+- `rᵢ = -0,001` : flux 0,1 % sous la médiane ;
+- `rᵢ = +0,001` : flux 0,1 % au-dessus.
+
+La médiane est préférée à la moyenne parce qu'elle est moins déplacée par quelques valeurs extrêmes.
+
+### Étape 3 — concaténer sans supprimer les trous
+
+Les couples `(TIME, r)` de tous les quarters sont réunis et triés par `TIME`. Aucune interpolation n'est faite. Le temps du premier point est ensuite soustrait à toutes les dates ; la courbe commence donc à `t = 0`, mais les écarts sont conservés.
+
+### Étape 4 — retirer les variations lentes
+
+Une médiane glissante d'environ deux jours, soit 99 cadences, estime une tendance locale `mᵢ`. On calcule :
+
+```text
+eᵢ = rᵢ - mᵢ
+```
+
+Une variation sur plusieurs jours est alors fortement réduite. Un transit de quelques heures devrait être mieux préservé car il occupe une petite partie de la fenêtre.
+
+Ce choix n'est pas neutre : un filtre trop court pourrait supprimer le transit ; un filtre trop long laisserait trop de variabilité stellaire. Deux jours est donc un paramètre de la méthode.
+
+### Étape 5 — exprimer le flux en unités de bruit
+
+On centre les résidus par leur médiane, puis on estime leur dispersion avec la MAD :
+
+```text
+MAD = médiane(|eᵢ - médiane(e)|)
+σ_robuste = 1,4826 × MAD
+yᵢ = (eᵢ - médiane(e)) / σ_robuste
+```
+
+Le facteur `1,4826` rend cette estimation comparable à un écart-type lorsque le bruit est gaussien. Après transformation, `y = -3` signifie approximativement « trois niveaux de bruit robuste sous la médiane ».
+
+### Étape 6 — limiter les valeurs extrêmes
+
+Les valeurs sont bornées entre `-8` et `+8`. Cette opération empêche quelques points aberrants de dominer le calcul :
+
+```text
+yᵢ final = min(8, max(-8, yᵢ))
+```
+
+Elle peut également limiter un transit extrêmement profond. C'est donc encore un choix à documenter, pas une vérité physique.
+
+### Résultat du prétraitement
+
+Pour un système, le BLS reçoit finalement :
+
+```text
+t = dates en jours, avec les trous réels
+y = flux sans dimension, centré et exprimé en bruit robuste
+```
+
+---
+
+## 7. Comment fonctionne le Box Least Squares ?
+
+### 7.1 Idée intuitive
+
+Le BLS cherche un motif qui ressemble à une boîte :
+
+```text
+flux normal ─────────┐       ┌─────────
+                    │       │
+flux en transit     └───────┘
+```
+
+Le modèle est volontairement simple. Un vrai transit possède des bords arrondis et dépend de l'assombrissement centre-bord de l'étoile, mais une boîte donne une approximation rapide de trois propriétés : sa position, sa durée et sa profondeur.
+
+### 7.2 Pourquoi ne voit-on pas directement les transits ?
+
+Une période de 10 jours observée pendant 270 jours produit environ 27 transits. Chaque transit peut ne durer que quelques heures. Sur le graphique complet, ces petites baisses sont noyées parmi des milliers de points.
+
+L'idée est donc de tester une période `P`, puis de superposer mentalement tous les intervalles de longueur `P`. Si `P` est correcte, les transits se placent les uns au-dessus des autres. Si `P` est incorrecte, les baisses se répartissent à des phases différentes et ne forment pas de motif stable.
+
+### 7.3 Calcul de la phase
+
+Pour une période d'essai `P` et une origine `t₀`, on transforme chaque date en phase :
+
+```text
+φᵢ = partie fractionnaire de ((tᵢ - t₀) / P)
+```
+
+La phase est comprise entre 0 et 1 :
+
+- `φ = 0` : début d'un cycle ;
+- `φ = 0,5` : milieu du cycle ;
+- `φ` proche de 1 : fin du cycle.
+
+Deux mesures séparées exactement de `P` jours ont la même phase. Replier la courbe revient à tracer `yᵢ` en fonction de `φᵢ` plutôt qu'en fonction de la date absolue.
+
+### 7.4 Ajustement de la boîte
+
+Pour chaque période, le BLS essaie également plusieurs durées et plusieurs positions de la boîte. Le modèle possède deux niveaux :
+
+```text
+mᵢ = niveau normal             hors de la boîte
+mᵢ = niveau normal - profondeur dans la boîte
+```
+
+Il choisit les paramètres qui réduisent le plus les résidus :
+
+```text
+RSS = Σ (yᵢ - mᵢ)²
+```
+
+Autrement dit, il compare la courbe à une ligne presque constante puis demande : « une petite boîte négative répétée améliore-t-elle nettement l'explication des données ? »
+
+Le calcul est répété pour un grand nombre de périodes. La période donnant le meilleur signal devient le candidat principal du système.
+
+### 7.5 Domaine réellement exploré
+
+L'implémentation sépare la recherche en trois bandes :
+
+| Périodes testées | Durées de boîte testées en jours | Équivalent en heures |
+|---|---|---|
+| 0,5 à 1 jour | 0,02 ; 0,04 ; 0,06 | 0,48 ; 0,96 ; 1,44 h |
+| 1 à 3 jours | 0,04 ; 0,08 ; 0,125 ; 0,20 | 0,96 ; 1,92 ; 3 ; 4,8 h |
+| 3 à 30 jours | 0,08 ; 0,125 ; 0,20 ; 0,30 ; 0,50 | 1,92 ; 3 ; 4,8 ; 7,2 ; 12 h |
+
+Au total, environ 100 000 périodes sont distribuées uniformément en **fréquence** `1/P`. Une grille régulière en fréquence contrôle mieux le décalage de phase accumulé sur une longue observation qu'une grille simplement régulière en période.
+
+Une étude de convergence a vérifié la densité de la grille sur les 32 positifs d'entraînement :
+
+| Taille de grille | Périodes connues retrouvées |
+|---:|---:|
+| 50 000 | 22/32 |
+| 100 000 | 23/32 |
+| 200 000 | 23/32 |
+
+Passer de 100 000 à 200 000 ne retrouve aucun système supplémentaire dans ce test. La grille de 100 000 est donc conservée pour réduire le temps de calcul.
+
+### 7.6 Pourquoi utiliser Astropy ?
+
+Le calcul est réalisé par [`astropy.timeseries.BoxLeastSquares`](https://docs.astropy.org/en/stable/timeseries/bls.html), avec :
+
+```python
+BoxLeastSquares(...).power(
+    period_grid,
+    durations,
+    objective="snr",
+    method="fast",
+    oversample=10,
+)
+```
+
+Astropy est une bibliothèque scientifique communautaire de référence en astronomie. Le projet ne compare donc pas le futur réseau à une réécriture approximative du BLS, mais à l'implémentation maintenue par Astropy.
+
+Références :
+
+- Kovács, Zucker et Mazeh (2002), [*A box-fitting algorithm in the search for periodic transits*](https://doi.org/10.1051/0004-6361:20020802) ;
+- Astropy Collaboration (2022), [présentation d'Astropy v5](https://doi.org/10.3847/1538-4357/ac7c74).
+
+La dépendance est bornée dans `requirements.txt` à `astropy>=8,<9`.
+
+### 7.7 Ce que renvoie le BLS pour un système
+
+Pour le meilleur motif trouvé, le programme enregistre notamment :
+
+| Résultat | Interprétation |
 |---|---|
-| `kepid` | identifiant KIC de l'étoile |
-| `label` | `CONFIRMED` ou `CONTROL` |
-| `has_confirmed_planet` | indicateur binaire 0/1 |
-| `confirmed_planet_count` | nombre total de planètes confirmées du système |
-| `detectable_planet_count` | nombre de planètes confirmées avec `P ≤ 30 jours` |
-| `confirmed_planet_names` | noms officiels séparés par `;` |
-| `split` | `train`, `validation` ou `test` |
-| `signal_count` | nombre de signaux confirmés recherchables par le BLS |
-| `periods_days` | périodes cataloguées, en jours |
-| `epochs_bkjd` | dates centrales de transit, en BKJD |
-| `durations_hours` | durées de transit cataloguées, en heures |
-| `quarters` | quarters demandés initialement ; les fichiers réellement obtenus sont consignés dans `download_status.csv` |
+| `period_days` | période estimée |
+| `duration_days` | durée estimée de la boîte |
+| `transit_epoch_days` | position temporelle estimée du transit |
+| `depth` | profondeur de la boîte dans le flux normalisé |
+| `depth_snr` | rapport signal sur bruit de la profondeur |
+| `log_likelihood` | qualité d'ajustement statistique |
+| `observed_transits` | nombre de passages couverts par les observations |
 
-`provenance.json` décrit la sélection et les sources ; `download_status.csv` permet la reprise des téléchargements ; `fits/<KIC>/` contient les courbes brutes.
+Le BLS trouve toujours son meilleur motif, même sur une étoile sans planète. Il faut donc encore décider si ce meilleur motif est suffisamment crédible.
 
-### 2.7 Reproductibilité et reprise après interruption
+---
 
-Installation :
+## 8. Du meilleur motif à une décision binaire
+
+### 8.1 Pourquoi la puissance BLS seule ne suffit pas
+
+Une étoile variable peut produire une oscillation presque sinusoïdale. Une binaire à éclipses peut produire des baisses profondes. Une discontinuité instrumentale peut ressembler à une boîte. Ces signaux peuvent obtenir un score BLS élevé sans correspondre à une planète.
+
+Astropy calcule donc des statistiques supplémentaires avec `compute_stats`. Le projet compare notamment le modèle en boîte à un modèle harmonique, plus adapté à une variation lisse.
+
+### 8.2 Score de contrôle utilisé
+
+On note :
+
+- `ΔlogL_harmonique` la statistique Astropy comparant le modèle harmonique au modèle en boîte ;
+- `D/P` la fraction de l'orbite occupée par le transit.
+
+Le score retenu est :
+
+```text
+S = √[ max(0, -ΔlogL_harmonique) / (D/P) ]
+```
+
+Dans la convention renvoyée ici par Astropy, une valeur négative de `ΔlogL_harmonique` favorise la boîte. Le signe moins transforme cet avantage en quantité positive. La division par `D/P` privilégie les baisses courtes par rapport à la période, forme attendue pour un transit planétaire plutôt que pour une variation occupant une grande partie du cycle.
+
+Ce score de contrôle est construit autour des statistiques du BLS Astropy ; ce n'est pas une constante officielle valable pour toute étude.
+
+### 8.3 Choix du seuil
+
+Une décision nécessite un seuil `T` :
+
+```text
+si S ≥ T : système déclaré détecté
+si S < T : système déclaré non détecté
+```
+
+Un seuil faible retrouve davantage de planètes mais accepte davantage de faux positifs. Un seuil élevé réduit les fausses alertes mais manque des planètes.
+
+Le seuil opérationnel est `162,8`, arrondi depuis `162,771681…`. Il maximise le score F1 sur les données de développement dans la plupart des plis.
+
+### 8.4 Validation croisée à six plis, étape par étape
+
+Même si le BLS n'apprend pas des millions de poids, choisir son score et son seuil à partir des labels est déjà une forme d'ajustement. Pour ne pas mesurer le résultat sur les mêmes objets qui ont choisi le seuil :
+
+1. les 42 positifs et les 2 958 contrôles sont répartis de manière stratifiée en six plis ;
+2. chaque pli contient 500 systèmes, dont 7 positifs ;
+3. on met un pli de côté ;
+4. sur les 2 500 autres systèmes, on compare quatre scores de contrôle et on choisit le seuil maximisant F1 ;
+5. on applique ce choix aux 500 systèmes laissés de côté ;
+6. on recommence jusqu'à ce que chaque système ait été laissé de côté une fois ;
+7. on réunit les 3 000 décisions qui ont toutes été produites hors de leur ensemble de calibration.
+
+Le score `short_box_vs_harmonic`, c'est-à-dire la formule ci-dessus, a été choisi dans les six plis. Cinq plis ont choisi un seuil proche de 162,77 et un pli un seuil proche de 172,77.
+
+---
+
+## 9. Comment lire les résultats ?
+
+### 9.1 Les quatre cas possibles
+
+| Vérité du catalogue | Décision BLS | Nom |
+|---|---|---|
+| confirmé | détecté | vrai positif (`TP`) |
+| contrôle | détecté | faux positif (`FP`) |
+| confirmé | non détecté | faux négatif (`FN`) |
+| contrôle | non détecté | vrai négatif (`TN`) |
+
+Résultat hors pli :
+
+|  | 42 confirmés | 2 958 contrôles |
+|---|---:|---:|
+| **BLS détecté** | 11 vrais positifs | 14 faux positifs |
+| **BLS non détecté** | 31 faux négatifs | 2 944 vrais négatifs |
+
+### 9.2 Précision
+
+La précision répond à la question :
+
+> Parmi les systèmes signalés par le BLS, combien sont réellement confirmés dans le catalogue ?
+
+```text
+précision = TP / (TP + FP)
+          = 11 / (11 + 14)
+          = 11 / 25
+          = 44,0 %
+```
+
+Le BLS émet 25 alertes ; 11 correspondent à un système confirmé et 14 à un contrôle.
+
+### 9.3 Rappel
+
+Le rappel répond à une autre question :
+
+> Parmi tous les systèmes confirmés du dataset, combien sont retrouvés ?
+
+```text
+rappel = TP / (TP + FN)
+       = 11 / (11 + 31)
+       = 11 / 42
+       = 26,2 %
+```
+
+Le seuil est donc conservateur : il évite beaucoup de fausses alertes mais ne retient qu'environ un quart des systèmes confirmés.
+
+### 9.4 F1
+
+Le score F1 est la moyenne harmonique de la précision et du rappel :
+
+```text
+F1 = 2 × précision × rappel / (précision + rappel)
+   = 32,8 %
+```
+
+Il devient faible si l'une des deux grandeurs est faible. Il permet de rechercher un compromis, mais il ne remplace pas l'examen séparé de la précision et du rappel.
+
+### 9.5 Pourquoi l'accuracy serait trompeuse
+
+L'exactitude globale vaudrait :
+
+```text
+accuracy = (TP + TN) / 3 000
+         = (11 + 2 944) / 3 000
+         = 98,5 %
+```
+
+Ce nombre semble excellent. Pourtant, une méthode répondant toujours « aucun système détecté » aurait :
+
+```text
+2 958 / 3 000 = 98,6 %
+```
+
+Elle aurait une meilleure accuracy tout en ne trouvant aucune planète. C'est pourquoi l'accuracy n'est pas la métrique principale sur ce dataset déséquilibré.
+
+### 9.6 Période retrouvée et classification ne sont pas identiques
+
+Pour vérifier la période, une estimation est considérée correcte si elle est à 1 % près :
+
+- de la période cataloguée ;
+- de sa moitié ;
+- ou de son double.
+
+Les facteurs 1/2 et 2 sont acceptés parce qu'un périodogramme peut confondre une période avec une harmonique.
+
+Le BLS retrouve ainsi une période compatible pour 29 des 42 systèmes positifs. Mais seulement 11 franchissent le seuil de classification. Parmi ces 11 alertes positives correctes, 10 possèdent une période compatible.
+
+Cela montre les deux étapes distinctes :
+
+1. trouver un pic à une période intéressante ;
+2. décider que ce pic est assez crédible pour déclencher une alerte.
+
+### 9.7 Interprétation honnête
+
+Le résultat ne signifie ni « BLS marche à 44 % », ni « BLS ne vaut rien ».
+
+- La précision de 44 % signifie que 11 des 25 alertes sont confirmées.
+- Le rappel de 26,2 % signifie que 31 des 42 systèmes confirmés sont manqués au seuil retenu.
+- Le taux de faux positifs parmi les contrôles est seulement `14/2 958 ≈ 0,47 %`.
+- Mais, puisque les positifs sont très rares, ces 14 erreurs suffisent à dépasser les 11 bonnes alertes.
+
+Le futur réseau devra donc améliorer le compromis : retrouver plus de systèmes confirmés sans laisser exploser les fausses alertes.
+
+---
+
+## 10. Comment comparer correctement le futur réseau de neurones ?
+
+La comparaison devra respecter au minimum les règles suivantes :
+
+1. utiliser les mêmes 3 000 KIC et les mêmes labels ;
+2. ne jamais placer deux observations du même KIC dans des partitions différentes ;
+3. commencer avec la même information physique : temps et flux ;
+4. choisir les hyperparamètres et le seuil sans consulter le test final ;
+5. publier la matrice de confusion, la précision, le rappel et F1 ;
+6. comparer aussi les courbes précision-rappel pour ne pas dépendre d'un seul seuil ;
+7. mesurer le temps de calcul et, pour le réseau, le coût de l'entraînement ;
+8. documenter toute représentation imposée au réseau : taille fixe, interpolation, fenêtres ou repliement.
+
+Le réseau pourrait être meilleur parce qu'il peut apprendre des formes plus complexes qu'une boîte : bords arrondis, bruit corrélé, variabilité stellaire ou artefacts caractéristiques. Mais cette conclusion ne sera valable que si aucune information du catalogue n'entre accidentellement dans ses données d'entrée.
+
+---
+
+## 11. Reproduire l'expérience
+
+### 11.1 Installation
 
 ```bash
 python3 -m venv .venv
@@ -193,97 +883,16 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Construction du manifeste, puis téléchargement ou reprise du dataset :
+### 11.2 Construire ou reprendre le dataset
 
 ```bash
 .venv/bin/python -m script.dataset.build manifest
 .venv/bin/python -m script.dataset.build download --fallback
 ```
 
-Le script écrit son état au fur et à mesure. Une relance ne retélécharge pas les fichiers déjà validés et reprend au premier élément incomplet.
+Le téléchargement est reprenable. Les fichiers déjà validés ne sont pas téléchargés une seconde fois. L'état est conservé dans `data/kepler_3000/download_status.csv`.
 
-## 3. Méthode Box Least Squares
-
-### 3.1 Principe physique et mathématique
-
-Lorsqu'une planète passe devant son étoile, elle masque une petite partie du disque stellaire et provoque une baisse quasi périodique du flux observé. À première approximation, un transit ressemble à une boîte :
-
-- un flux constant hors transit ;
-- une baisse de profondeur donnée pendant une courte durée ;
-- une répétition à la période orbitale.
-
-Le **Box Least Squares** replie la courbe de lumière sur de nombreuses périodes d'essai. Pour chaque période, il cherche la phase, la durée et la profondeur de la boîte qui minimisent les résidus quadratiques entre le modèle et les observations. Le maximum de puissance du périodogramme indique la périodicité rectangulaire la plus compatible avec les données.
-
-Le BLS est particulièrement adapté aux transits : un périodogramme sinusoïdal classique dilue un signal bref, alors que le modèle en boîte concentre l'information dans la fraction de phase effectivement occupée par le transit.
-
-### 3.2 Bibliothèque retenue
-
-L'implémentation utilisée est [`astropy.timeseries.BoxLeastSquares`](https://docs.astropy.org/en/stable/timeseries/bls.html), fournie par **Astropy**, bibliothèque scientifique de référence en astronomie. Ce choix évite de comparer le futur réseau à une approximation personnelle du BLS et fournit une implémentation testée, documentée et fondée sur l'algorithme publié.
-
-Références principales :
-
-- Kovács, Zucker & Mazeh (2002), [*A box-fitting algorithm in the search for periodic transits*](https://doi.org/10.1051/0004-6361:20020802) ;
-- Astropy Collaboration (2022), [*The Astropy Project: Sustaining and Growing a Community-oriented Open-source Project and the Latest Major Release (v5.0)*](https://doi.org/10.3847/1538-4357/ac7c74).
-
-La version est bornée dans `requirements.txt` (`astropy>=8,<9`) afin de limiter les variations de résultats entre environnements.
-
-### 3.3 Prétraitement des courbes
-
-Pour chaque système, le traitement réellement exécuté est le suivant :
-
-1. dans chaque FITS, garder `TIME` et `PDCSAP_FLUX` uniquement lorsque `SAP_QUALITY = 0` et que les deux valeurs sont finies ;
-2. diviser le flux par la médiane du quarter et soustraire 1 ;
-3. concaténer les segments et les trier par `TIME` ;
-4. soustraire une médiane glissante d'environ 2 jours (99 cadences) pour retirer les variations lentes ;
-5. centrer les résidus par leur médiane et les diviser par `1,4826 × MAD`, estimation robuste de l'écart-type ;
-6. borner les valeurs normalisées entre −8 et +8 ;
-7. fournir au BLS les deux vecteurs `TIME` et flux résiduel normalisé.
-
-Cette opération transforme donc les électrons par seconde en une grandeur sans dimension exprimée en unités de bruit robuste. Le temps est seulement décalé pour commencer à zéro ; les écarts temporels ne sont pas supprimés.
-
-Les mêmes données brutes et des règles de prétraitement documentées devront être fournies au réseau de neurones. Toute différence de représentation devra être annoncée comme une composante de la méthode comparée.
-
-### 3.4 Domaine de recherche et score de décision
-
-La recherche officielle évalue **100 000 périodes entre 0,5 et 30 jours** et plusieurs durées de transit. La taille de la grille a été vérifiée par une étude de convergence sur les positifs d'entraînement :
-
-| Nombre de périodes | Périodes retrouvées |
-|---:|---:|
-| 50 000 | 22/32 |
-| 100 000 | 23/32 |
-| 200 000 | 23/32 |
-
-Le passage de 100 000 à 200 000 points n'améliore donc plus cette mesure tout en doublant approximativement le coût du périodogramme.
-
-Un pic BLS élevé ne suffit pas : les variations stellaires, les discontinuités instrumentales et les harmoniques peuvent également produire une forte puissance. Le pipeline applique donc un contrôle (*vetting*) et emploie le score :
-
-```text
-score = sqrt(max(0, -Δlog L_harmonique) / (durée / période))
-```
-
-où `Δlog L_harmonique` mesure l'avantage du signal en boîte sur un modèle harmonique. Le seuil retenu par validation est **162,8**. Une prédiction est positive si le score est supérieur ou égal à ce seuil. Ce nombre n'est pas une constante universelle : il dépend du dataset, du prétraitement et du compromis recherché entre rappel et fausses alertes.
-
-### 3.5 Résultats de référence
-
-Les prédictions hors pli de la validation croisée donnent :
-
-|  | Planète confirmée | Contrôle |
-|---|---:|---:|
-| **BLS positif** | 11 vrais positifs | 14 faux positifs |
-| **BLS négatif** | 31 faux négatifs | 2 944 vrais négatifs |
-
-Soit :
-
-- précision : **44,0 %** ;
-- rappel : **26,2 %** ;
-- score F1 : **32,8 %** ;
-- spécificité : **99,53 %**.
-
-La période connue, ou son harmonique ×0,5/×2 à 1 % près, est retrouvée pour 29 des 42 systèmes positifs. Parmi les 11 systèmes finalement déclarés positifs, 10 ont une période correcte selon ce critère.
-
-Ces chiffres ne signifient pas que le BLS « fonctionne à 44 % ». La précision mesure la proportion de vraies planètes parmi les alertes, tandis que le rappel mesure la proportion des systèmes confirmés retrouvés. Dans un dataset où seuls 1,4 % des systèmes sont positifs, 14 fausses alertes suffisent déjà à réduire fortement la précision. Le résultat exprime donc un compromis conservateur : très peu de faux positifs, mais beaucoup de planètes manquées.
-
-Exécution complète :
+### 11.3 Calculer les scores BLS
 
 ```bash
 .venv/bin/python -m script.evaluate_fits --split train --engine official \
@@ -292,56 +901,86 @@ Exécution complète :
   --threshold 162.8 --output data/bls-official-validation.json
 .venv/bin/python -m script.evaluate_fits --split test --engine official \
   --threshold 162.8 --output data/bls-official-test.json
+```
+
+### 11.4 Refaire la validation croisée et le dashboard
+
+```bash
 .venv/bin/python -m script.cross_validate_official_bls
 .venv/bin/python script/export_official_dashboard.py
 ```
 
-Les paramètres sont centralisés dans `script/config.py`. Les résultats numériques sont exportés dans `data/bls-official-*.json`, puis la version destinée au site dans `web/results.json`.
+### 11.5 Régénérer la figure d'exemple
 
-## 4. Comparaison future avec un réseau de neurones
+```bash
+.venv/bin/python -m script.plot_system_example
+```
 
-L'hypothèse à tester est qu'un réseau de neurones peut apprendre des formes plus riches qu'une boîte périodique : géométrie réelle du transit, bruit corrélé, variabilité stellaire et signatures instrumentales. Une amélioration n'est cependant démontrée que si le protocole reste identique.
-
-La comparaison devra donc respecter les conditions suivantes :
-
-- mêmes 3 000 identifiants KIC et mêmes labels ;
-- mêmes plis de validation croisée ou même jeu de test final gelé ;
-- absence de fuite d'information entre observations d'un même système ;
-- seuils choisis uniquement sur les plis d'entraînement/validation ;
-- publication de la matrice de confusion, de la précision, du rappel, du F1 et des courbes précision-rappel ;
-- prise en compte du temps de calcul et du coût d'entraînement.
-
-L'objectif n'est donc pas d'atteindre artificiellement 100 %, mais de déterminer si le réseau améliore de façon reproductible le compromis entre planètes retrouvées et fausses alertes par rapport au meilleur BLS retenu.
-
-## 5. Tableau de bord et vérifications
-
-Le tableau de bord statique est contenu dans `web/`. Il affiche les 3 000 décisions, la matrice de confusion, les métriques, les scores et les périodes estimées. Il peut être consulté localement sans modifier les données :
+### 11.6 Lancer le dashboard localement
 
 ```bash
 cd web
 ../.venv/bin/python -m http.server 8000
 ```
 
-Puis ouvrir <http://localhost:8000>. Le workflow GitHub Pages republie automatiquement le site public après chaque modification de `web/` sur la branche `main`.
+Puis ouvrir <http://localhost:8000>. La version publique est déployée automatiquement sur [GitHub Pages](https://tcrouzet.github.io/EmileTipe/) lorsque `web/` change sur `main`.
 
-Tests :
+### 11.7 Exécuter les tests
 
 ```bash
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-## Organisation du dépôt
+---
+
+## 12. Fichiers importants
 
 ```text
+data/kepler_3000/
+  manifest.csv                 un système et son label par ligne
+  provenance.json             sources, requêtes et paramètres de sélection
+  download_status.csv         état reprenable des téléchargements
+  fits/<KIC>/*.fits            observations, non publiées dans Git
+
 script/
   config.py                    paramètres communs
-  dataset/build.py             construction et reprise du dataset
-  bls/official.py              BLS Astropy et validation croisée
-  export_official_dashboard.py export des résultats vers le site
-web/                           dashboard statique GitHub Pages
-slides/                        présentation générale du projet
+  dataset/build.py             création du dataset
+  bls/official.py              appel au BLS Astropy
+  bls/preprocessing.py         normalisation et filtrage
+  evaluate_fits.py             calcul des scores sur les systèmes
+  cross_validate_official_bls.py
+                               choix hors pli du score et du seuil
+  export_official_dashboard.py création de web/results.json
+  plot_system_example.py       figure scientifique du README
+
+web/                           dashboard statique
 tests/                         tests automatisés
-data/kepler_3000/              manifeste et provenance
+slides/                        présentation générale
 ```
 
-Les données volumineuses et les résultats intermédiaires régénérables ne sont pas publiés dans Git. Le manifeste et la provenance permettent d'identifier précisément les observations utilisées.
+## Glossaire minimal
+
+| Terme | Définition courte |
+|---|---|
+| BLS | recherche d'une baisse rectangulaire et périodique dans une série temporelle |
+| cadence | intervalle entre deux mesures successives |
+| courbe de lumière | flux d'une étoile représenté en fonction du temps |
+| FITS | format de fichier scientifique utilisé en astronomie |
+| flux | quantité de lumière mesurée par unité de temps |
+| KIC | identifiant d'une étoile dans le Kepler Input Catalog |
+| KOI | objet Kepler sélectionné pour une analyse approfondie |
+| quarter | segment d'environ trois mois de la mission Kepler |
+| transit | passage d'une planète devant son étoile, produisant une baisse de flux |
+| TCE | signal périodique ayant franchi le seuil automatique du pipeline Kepler |
+
+## Limites actuelles à garder en tête
+
+- Les contrôles ne sont pas garantis sans planète ; ils sont sans KOI ni TCE catalogué.
+- Seuls un à trois quarters sont utilisés, et non toute la mission Kepler.
+- Tous les positifs ont trois fichiers, contrairement à certains contrôles.
+- Les incertitudes de flux ne sont pas utilisées par le BLS actuel.
+- Le filtre médian et l'écrêtage peuvent modifier certains signaux.
+- La plage 0,5–30 jours exclut les périodes plus longues.
+- Le score de contrôle et le seuil sont propres à ce protocole.
+
+Ces limites devront être conservées ou explicitement prises en compte lors de la comparaison avec le réseau de neurones.
