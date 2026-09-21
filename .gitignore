@@ -1,6 +1,7 @@
 _*
 .DS_Store
 AGENTS.md
+.codex
 
 .venv/
 node_modules/
