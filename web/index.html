@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#ffffff">
+  <title>EmileType — Résultats BLS</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main>
+    <header class="hero">
+      <div>
+        <p class="brand"><span class="brand-dots"><i></i><i></i><i></i><i></i></span> EmileType</p>
+        <h1>Résultats BLS</h1>
+        <p class="lede">Évaluation de la détection d'exoplanètes dans les courbes Kepler.</p>
+      </div>
+      <div class="dataset-state">
+        <span id="status-dot" class="status-dot"></span>
+        <div><small>JEU DE DONNÉES</small><strong id="dataset-name">Chargement…</strong></div>
+      </div>
+    </header>
+
+    <section class="controls panel" aria-label="Réglage du seuil">
+      <div>
+        <p class="section-label">Seuil de décision</p>
+        <h2>Score BLS ≥ <output id="threshold-value">162,8</output></h2>
+      </div>
+      <input id="threshold" type="range" min="0" max="30" step="0.1" value="7" aria-label="Seuil du rapport signal sur bruit">
+      <p class="hint">Ajustez le seuil pour comparer détections et fausses alertes.</p>
+    </section>
+
+    <section class="metrics" aria-label="Indicateurs principaux">
+      <article class="metric metric-main"><span>Systèmes analysés</span><strong id="systems">—</strong><small id="real-planets">— exoplanètes réelles</small></article>
+      <article class="metric metric-good"><span>Détections justes</span><strong id="true-positive">—</strong><small>vrais positifs</small></article>
+      <article class="metric metric-warn"><span>Fausses alertes</span><strong id="false-positive">—</strong><small>faux positifs</small></article>
+      <article class="metric metric-bad"><span>Transits manqués</span><strong id="false-negative">—</strong><small>faux négatifs</small></article>
+      <article class="metric"><span>Décisions justes</span><strong id="accuracy-count">—</strong><small id="accuracy-rate">—</small></article>
+    </section>
+
+    <section class="dashboard-grid">
+      <article class="panel confusion-panel">
+        <div class="panel-heading">
+          <div><p class="section-label">Matrice de confusion</p><h2>Réalité × décision BLS</h2></div>
+          <div class="legend"><span class="dot correct"></span> juste <span class="dot wrong"></span> erreur</div>
+        </div>
+        <div class="matrix" role="table" aria-label="Matrice de confusion">
+          <div></div><div class="axis">BLS : exoplanète</div><div class="axis">BLS : aucune</div>
+          <div class="axis row-axis">Réalité : exoplanète</div>
+          <div class="matrix-cell correct"><strong id="matrix-tp">—</strong><span>vrais positifs</span></div>
+          <div class="matrix-cell wrong"><strong id="matrix-fn">—</strong><span>faux négatifs</span></div>
+          <div class="axis row-axis">Réalité : aucune</div>
+          <div class="matrix-cell wrong"><strong id="matrix-fp">—</strong><span>faux positifs</span></div>
+          <div class="matrix-cell correct"><strong id="matrix-tn">—</strong><span>vrais négatifs</span></div>
+        </div>
+      </article>
+
+      <article class="panel scores-panel">
+        <p class="section-label">Qualité de classification</p>
+        <h2>Trois lectures complémentaires</h2>
+        <div class="score" data-score="precision"><div><span>Précision</span><strong id="precision">—</strong></div><div class="track"><i id="precision-bar"></i></div><small>Parmi les détections, combien sont réelles ?</small></div>
+        <div class="score" data-score="recall"><div><span>Rappel</span><strong id="recall">—</strong></div><div class="track"><i id="recall-bar"></i></div><small>Parmi les exoplanètes, combien sont trouvées ?</small></div>
+        <div class="score" data-score="specificity"><div><span>Spécificité</span><strong id="specificity">—</strong></div><div class="track"><i id="specificity-bar"></i></div><small>Parmi les étoiles seules, combien sont reconnues ?</small></div>
+      </article>
+    </section>
+
+    <section class="panel chart-panel">
+      <div class="panel-heading">
+        <div><p class="section-label">Distribution du score</p><h2>Vetting BLS par système</h2></div>
+        <div class="legend"><span class="dot planet"></span> exoplanète réelle <span class="dot star"></span> sans exoplanète</div>
+      </div>
+      <canvas id="snr-chart" height="300" aria-label="Distribution des scores signal sur bruit"></canvas>
+    </section>
+
+    <section class="panel table-panel">
+      <div class="panel-heading">
+        <div><p class="section-label">Inspection</p><h2>Signaux les plus forts</h2></div>
+        <span id="analysis-meta" class="meta"></span>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Système</th><th>Classe réelle</th><th>Score</th><th>Période</th><th>Durée</th><th>Décision</th><th>Verdict</th></tr></thead>
+          <tbody id="results-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <footer><span>EmileType · TIPE</span><span id="generated-at"></span></footer>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

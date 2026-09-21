@@ -1,0 +1,4 @@
+# Telechargement et lecture des courbes FITS officielles Kepler/MAST.
+certifi>=2025.8
+astropy>=8,<9
+lightkurve>=2.5,<3

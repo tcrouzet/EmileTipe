@@ -1,0 +1,13 @@
+{
+  "name": "emiletype",
+  "private": true,
+  "scripts": {
+    "slides:build": "marp --html=true --theme-set=slides/theme.css --output=slides/presentation.html slides/presentation.md",
+    "slides:watch": "marp --html=true --theme-set=slides/theme.css --watch --output=slides/presentation.html slides/presentation.md",
+    "slides:pdf": "marp --html=true --theme-set=slides/theme.css --pdf --output=slides/presentation.pdf slides/presentation.md",
+    "slides:pptx": "marp --html=true --theme-set=slides/theme.css --pptx --output=slides/presentation.pptx slides/presentation.md"
+  },
+  "devDependencies": {
+    "@marp-team/marp-cli": "^4.2.3"
+  }
+}
