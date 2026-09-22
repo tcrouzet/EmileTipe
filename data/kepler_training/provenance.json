@@ -1,0 +1,81 @@
+{
+  "created_at_utc": "2026-09-21T18:45:42.290107+00:00",
+  "profile": "training",
+  "purpose": "balanced neural-network training and validation dataset",
+  "catalogs": {
+    "confirmed_planets": {
+      "table": "q1_q17_dr25_koi",
+      "source": "https://exoplanetarchive.ipac.caltech.edu/TAP/sync?query=select+kepid%2Ckepoi_name%2Ckepler_name%2Ckoi_period%2Ckoi_time0bk%2Ckoi_duration%2Ckoi_disposition+from+q1_q17_dr25_koi+where+koi_disposition%3D%27CONFIRMED%27&format=csv",
+      "sha256": "9922854cbbdfa54a300ef235e9721b0ab64e6e1eb6f94cdf4ad196e96bda2bad"
+    },
+    "observed_stars": {
+      "table": "q1_q17_dr25_stellar",
+      "source": "https://exoplanetarchive.ipac.caltech.edu/cgi-bin/nstedAPI/nph-nstedAPI?table=q1_q17_dr25_stellar&select=kepid&format=csv",
+      "sha256": "3a73f946a57ec67f4d2a8b0896b6358a9cd2dffffd9ed4f16f294ea057634a98"
+    },
+    "excluded_tce_hosts": {
+      "table": "q1_q17_dr25_tce",
+      "source": "https://exoplanetarchive.ipac.caltech.edu/TAP/sync?query=select+kepid+from+q1_q17_dr25_tce&format=csv",
+      "sha256": "a959d0f687c9c89d3aa1782dfc79ca3af2e6023e4907af2ee6e16e972520241d"
+    },
+    "excluded_koi_hosts": {
+      "table": "q1_q17_dr25_koi",
+      "source": "https://exoplanetarchive.ipac.caltech.edu/TAP/sync?query=select+kepid+from+q1_q17_dr25_koi&format=csv",
+      "sha256": "cc400bef3d8256ef41978b7f4b1084ec9e5e5c9cac03315e6bea5867bb3cb917"
+    }
+  },
+  "manifest_sha256": "e13edd9c8dec971968c7f1a98d24cd1182642cdca549b6b32e00c1d9e10a8288",
+  "selection": {
+    "seed": 727,
+    "labels": [
+      "CONFIRMED",
+      "CONTROL"
+    ],
+    "class_counts": {
+      "CONFIRMED": 1500,
+      "CONTROL": 1500
+    },
+    "class_splits": {
+      "CONFIRMED": {
+        "train": 1200,
+        "validation": 300
+      },
+      "CONTROL": {
+        "train": 1200,
+        "validation": 300
+      }
+    },
+    "max_period_days": 30.0,
+    "control_definition": "DR25 stellar target without any DR25 KOI or TCE",
+    "all_known_koi_and_tce_hosts_excluded_from_controls": true,
+    "quarters": [
+      4,
+      5,
+      6
+    ]
+  },
+  "eligible_systems_before_sampling": {
+    "CONFIRMED": 1568,
+    "CONTROL": 179804
+  },
+  "selected_systems": {
+    "CONFIRMED": 1500,
+    "CONTROL": 1500
+  },
+  "splits": {
+    "train": 2400,
+    "validation": 600
+  },
+  "leakage_prevention": {
+    "excluded_manifest": "data/kepler_3000/manifest.csv",
+    "excluded_manifest_sha256": "dbdf6c2a909b32fb55ca06f0a613a9e2084ce157a689613c30fc7a1548275695",
+    "excluded_systems": 3000,
+    "overlap_after_selection": 0
+  },
+  "confirmed_planets": {
+    "host_systems": 1500,
+    "known_planets": 2186,
+    "within_period_limit": 1979,
+    "multiplanet_systems": 441
+  }
+}
